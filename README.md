@@ -1,1 +1,1 @@
-# msci_research
+This repository stores projects related to the MSci in Research program. It will contain shared files with the professor supervising my project, Dr. Ji-Eun Byun, to promote collaboration between our ends and combine our efforts.
