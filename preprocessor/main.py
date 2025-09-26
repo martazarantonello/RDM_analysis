@@ -1,4 +1,11 @@
 # this will be the overall "save processed data" function that was previously defined
+# to run then: 
+# python -m preprocessor.main 
+# in terminal
+# you have two options to choose processing mode:
+#      1. Process a single station       
+#      2. Process all Category A stations
+#      Enter choice (1 or 2): HERE
 
 
 """
