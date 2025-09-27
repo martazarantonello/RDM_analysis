@@ -865,7 +865,7 @@ def aggregate_view(incident_number, date):
     
     # Create visualizations with three subplots
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(16, 15))
-    fig.suptitle(f'Incident Analysis: {incident_number} on {date}', fontsize=16, fontweight='bold')
+    fig.suptitle(f'Incident Analysis: {incident_number} on {date}', fontsize=16, fontweight='bold', fontfamily='Arial')
     
     # Helper function to add time period shading
     def add_time_shading(ax):
@@ -891,11 +891,11 @@ def aggregate_view(incident_number, date):
         ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
         ax.xaxis.set_minor_locator(mdates.HourLocator(interval=1))
-        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45)
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, fontsize=16, fontfamily='Arial')
         ax.grid(True, alpha=0.3)
     
     # Chart 1: Hourly Delay Totals (24-Hour View)
-    ax1.set_title('Hourly Delay Totals (24-Hour View)', fontsize=14, pad=20)
+    ax1.set_title('Hourly Delay Totals (24-Hour View)', fontsize=16, pad=20, fontfamily='Arial')
     
     # Filter out rows with no delays and group by hour
     delay_data = df[df['PFPI_MINUTES'] > 0].copy()
@@ -922,7 +922,7 @@ def aggregate_view(incident_number, date):
     for i, (dt, val) in enumerate(zip(hour_datetimes, hour_values)):
         if val > 0:
             ax1.text(dt, val + max_val * 0.01, f'{val:.0f}', 
-                    ha='center', va='bottom', fontsize=10, fontweight='bold')
+                    ha='center', va='bottom', fontsize=16, fontweight='bold', fontfamily='Arial')
     
     # Add INCIDENT_START_DATETIME markers
     if 'start_chart_datetime' in df.columns:
@@ -935,15 +935,16 @@ def aggregate_view(incident_number, date):
             ax1.axvline(x=incident_start_times[0], color='red', linestyle='--', linewidth=3, alpha=0.9, 
                        label='Incident Start Time')
     
-    ax1.legend()
+    ax1.legend(fontsize=16)
     
-    ax1.set_ylabel('Total Delay Minutes per Hour', fontsize=12)
-    ax1.set_xlabel('Hour of Day', fontsize=12)
+    ax1.set_ylabel('Total Delay Minutes per Hour', fontsize=16, fontfamily='Arial')
+    ax1.set_xlabel('Hour of Day', fontsize=16, fontfamily='Arial')
+    ax1.tick_params(axis='y', labelsize=16)
     format_time_axis(ax1)
     add_time_shading(ax1)
     
     # Chart 2: Delay Severity Distribution
-    ax2.set_title('Delay Severity Distribution (Count by Severity Range)', fontsize=14, pad=20)
+    ax2.set_title('Delay Severity Distribution (Count by Severity Range)', fontsize=16, pad=20, fontfamily='Arial')
     
     if len(delay_data) > 0:
         # Create severity ranges
@@ -965,25 +966,26 @@ def aggregate_view(incident_number, date):
         for bar, count in zip(bars, counts):
             if count > 0:
                 ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(counts) * 0.01,
-                        f'{count}', ha='center', va='bottom', fontsize=11, fontweight='bold')
+                        f'{count}', ha='center', va='bottom', fontsize=16, fontweight='bold', fontfamily='Arial')
         
-        ax2.set_ylabel('Number of Delay Events', fontsize=12)
-        ax2.set_xlabel('Delay Severity Range', fontsize=12)
+        ax2.set_ylabel('Number of Delay Events', fontsize=16, fontfamily='Arial')
+        ax2.set_xlabel('Delay Severity Range', fontsize=16, fontfamily='Arial')
+        ax2.tick_params(axis='both', labelsize=16)
         
         # Add total delay info
         total_events = len(delay_data)
         avg_delay = delay_values.mean()
         ax2.text(0.02, 0.98, f'Total Events: {total_events}\nAverage Delay: {avg_delay:.1f} min', 
-                transform=ax2.transAxes, verticalalignment='top', fontsize=10,
+                transform=ax2.transAxes, verticalalignment='top', fontsize=16, fontfamily='Arial',
                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
     else:
         ax2.text(0.5, 0.5, 'No delay events found', transform=ax2.transAxes, 
-                ha='center', va='center', fontsize=14)
+                ha='center', va='center', fontsize=16, fontfamily='Arial')
     
     ax2.grid(True, alpha=0.3, axis='y')
     
     # Chart 3: Event Timeline (Delays and Cancellations)
-    ax3.set_title('Event Timeline: Delays and Cancellations (24-Hour View)', fontsize=14, pad=20)
+    ax3.set_title('Event Timeline: Delays and Cancellations (24-Hour View)', fontsize=16, pad=20, fontfamily='Arial')
     
     # Separate delays and cancellations
     delays = df[df['EVENT_TYPE'] != 'C'].copy()
@@ -1005,7 +1007,7 @@ def aggregate_view(incident_number, date):
             ax3.annotate('CANCELLED', 
                        (row['chart_datetime'], row['PFPI_MINUTES']), 
                        xytext=(5, 5), textcoords='offset points',
-                       fontsize=9, color='red', weight='bold')
+                       fontsize=16, color='red', weight='bold', fontfamily='Arial')
     
     # Add INCIDENT_START_DATETIME markers
     if 'start_chart_datetime' in df.columns:
@@ -1021,10 +1023,11 @@ def aggregate_view(incident_number, date):
     # Always show legend if there are any elements
     handles, labels = ax3.get_legend_handles_labels()
     if handles:
-        ax3.legend()
+        ax3.legend(fontsize=16)
     
-    ax3.set_ylabel('Delay Minutes', fontsize=12)
-    ax3.set_xlabel('Time of Day (24-Hour Timeline)', fontsize=12)
+    ax3.set_ylabel('Delay Minutes', fontsize=16, fontfamily='Arial')
+    ax3.set_xlabel('Time of Day (24-Hour Timeline)', fontsize=16, fontfamily='Arial')
+    ax3.tick_params(axis='y', labelsize=16)
     format_time_axis(ax3)
     add_time_shading(ax3)
     
