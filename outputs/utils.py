@@ -373,6 +373,8 @@ def incident_view(incident_code, incident_date, analysis_date, analysis_hhmm, pe
     # Find incident start time and collect data from each station
     incident_start_time = None
     incident_delay_day = None
+    incident_section_code = None
+    incident_reason = None
     station_results = []  # List to store results from each station
     
     print(f"Analyzing incident {incident_code} (started {incident_date})")
@@ -406,6 +408,8 @@ def incident_view(incident_code, incident_date, analysis_date, analysis_hhmm, pe
             if incident_start_time is None:
                 incident_start_time = incident_records['INCIDENT_START_DATETIME'].iloc[0]
                 incident_delay_day = incident_records['DELAY_DAY'].iloc[0]
+                incident_section_code = incident_records['SECTION_CODE'].iloc[0]
+                incident_reason = incident_records['INCIDENT_REASON'].iloc[0]
                 
                 # Validate that analysis time is after incident start
                 incident_start_dt = datetime.strptime(incident_start_time, '%d-%b-%Y %H:%M')
@@ -542,6 +546,30 @@ def incident_view(incident_code, incident_date, analysis_date, analysis_hhmm, pe
         print(f"Incident {incident_code} not found on {incident_date}")
         return pd.DataFrame(), None, None
     
+    # Get station name for the section code
+    incident_station_name = None
+    if incident_section_code:
+        try:
+            # Load station codes reference file
+            from data.reference import reference_files
+            import json  # Ensure json is available in this scope
+            with open(reference_files["station codes"], 'r') as f:
+                station_codes_data = json.load(f)
+            
+            # Find station matching the section code
+            for record in station_codes_data:
+                if isinstance(record, dict) and str(record.get('stanox')) == str(incident_section_code):
+                    incident_station_name = record.get('description')
+                    break
+        except Exception:
+            pass  # Continue without station name if lookup fails
+    
+    # Print incident details
+    print(f"Incident Details:")
+    print(f"  Section Code: {incident_section_code}" + (f" ({incident_station_name})" if incident_station_name else ""))
+    print(f"  Incident Reason: {incident_reason}")
+    print(f"  Started: {incident_start_time}")
+    
     if not station_results:
         print(f"No station activity found during analysis period")
         return pd.DataFrame(), incident_start_time, analysis_period_str
@@ -577,7 +605,11 @@ def incident_view_html(incident_code, incident_date, analysis_date, analysis_hhm
     str: HTML content of the interactive map
     """
     
-    if stations_coords is None:
+    # Load station coordinates data
+    try:
+        from data.reference import reference_files
+        stations_coords = pd.read_pickle(reference_files["category A stations"])
+    except FileNotFoundError:
         print("Station coordinates not available. Cannot create map.")
         return None
     
@@ -622,6 +654,9 @@ def incident_view_html(incident_code, incident_date, analysis_date, analysis_hhm
     
     # Collect delay timeline data for all stations
     station_timeline_data = {}  # {station_code: [(datetime, cumulative_delay_minutes)]}
+    incident_section_code = None
+    incident_reason = None
+    incident_start_time = None
     
     for file in station_files:
         filename = file.split('\\')[-1]
@@ -643,6 +678,15 @@ def incident_view_html(incident_code, incident_date, analysis_date, analysis_hhm
             all_incident_data = df[df['INCIDENT_NUMBER'] == incident_code].copy()
             if all_incident_data.empty:
                 continue
+            
+            # Extract incident information on first occurrence
+            if incident_section_code is None and not all_incident_data.empty:
+                # Get incident details from the first record that matches the incident date
+                incident_records = all_incident_data[all_incident_data['INCIDENT_START_DATETIME'].str.contains(incident_date, na=False)]
+                if not incident_records.empty:
+                    incident_section_code = incident_records['SECTION_CODE'].iloc[0]
+                    incident_reason = incident_records['INCIDENT_REASON'].iloc[0]
+                    incident_start_time = incident_records['INCIDENT_START_DATETIME'].iloc[0]
             
             # Filter to events within our analysis period
             all_incident_data['EVENT_DATETIME_parsed'] = pd.to_datetime(all_incident_data['EVENT_DATETIME'], format='%d-%b-%Y %H:%M', errors='coerce')
@@ -694,6 +738,31 @@ def incident_view_html(incident_code, incident_date, analysis_date, analysis_hhm
         return None
     
     print(f"Found delay data for {len(station_timeline_data)} stations")
+    
+    # Get incident location coordinates
+    incident_lat = 54.5  # Default to center of UK
+    incident_lon = -2.0
+    incident_station_name = None
+    
+    if incident_section_code:
+        try:
+            # Load station codes reference file
+            from data.reference import reference_files
+            import json  # Ensure json is available in this scope
+            with open(reference_files["station codes"], 'r') as f:
+                station_codes_data = json.load(f)
+            
+            # Find station matching the section code
+            for record in station_codes_data:
+                if isinstance(record, dict) and str(record.get('stanox')) == str(incident_section_code):
+                    if record.get('latitude') and record.get('longitude'):
+                        incident_lat = float(record['latitude'])
+                        incident_lon = float(record['longitude'])
+                        incident_station_name = record.get('description')
+                        print(f"Found incident location: {incident_station_name} ({incident_lat}, {incident_lon})")
+                        break
+        except Exception as e:
+            print(f"Warning: Could not load incident location coordinates: {e}")
     
     # Create time steps for animation using the specified interval
     time_steps = []
@@ -832,6 +901,7 @@ def incident_view_html(incident_code, incident_date, analysis_date, analysis_hhm
         <div class="control-panel">
             <h3 style="margin-top: 0;">Incident {incident_code} - {analysis_date}</h3>
             <p style="margin: 5px 0;">Analysis Period: {analysis_datetime.strftime('%H:%M')} - {analysis_end.strftime('%H:%M')} ({period_minutes} min total, {interval_minutes}-min intervals)</p>
+            <p style="margin: 5px 0; font-weight: bold;">Section: {incident_section_code or 'N/A'}{' (' + incident_station_name + ')' if incident_station_name else ''} | Reason: {incident_reason or 'N/A'} | Started: {incident_start_time or 'N/A'}</p>
             
             <div class="time-display" id="current-time">{time_steps[0].strftime('%H:%M')}</div>
             
@@ -853,6 +923,26 @@ def incident_view_html(incident_code, incident_date, analysis_date, analysis_hhm
         L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
             attribution: '© OpenStreetMap contributors'
         }}).addTo(map);
+        
+        // Add incident location marker at actual coordinates
+        var incidentMarker = L.marker([{incident_lat}, {incident_lon}], {{
+            icon: L.divIcon({{
+                html: '<div style="font-size: 24px; color: red; font-weight: bold;">✕</div>',
+                className: 'incident-marker',
+                iconSize: [30, 30],
+                iconAnchor: [15, 15]
+            }})
+        }}).addTo(map);
+        
+        incidentMarker.bindPopup(`
+            <strong>Incident Location</strong><br>
+            Station: {incident_station_name or 'Unknown'}<br>
+            Incident: {incident_code}<br>
+            Section: {incident_section_code or 'N/A'}<br>
+            Reason: {incident_reason or 'N/A'}<br>
+            Started: {incident_start_time or 'N/A'}<br>
+            <em>Coordinates: {incident_lat:.4f}, {incident_lon:.4f}</em>
+        `);
         
         // Data
         var stationCoords = {station_coords_json};
