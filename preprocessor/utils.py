@@ -170,14 +170,43 @@ def process_schedule(st_code, schedule_data=None, reference_files=None,
     Returns:
         list: Sorted schedule timeline.
     """
-    # If pre-loaded data is not provided, load it using the centralized function
-    if any(param is None for param in [train_count, tiploc, schedule_data_loaded, stanox_ref, tiploc_to_stanox]):
+    # Check if we have pre-loaded data (the critical components)
+    if schedule_data_loaded is not None and stanox_ref is not None and tiploc_to_stanox is not None:
+        print("Using pre-loaded data (much faster!)")
+        
+        # If train_count and tiploc are not provided, calculate them from pre-loaded data
+        if train_count is None or tiploc is None:
+            # Find TIPLOC for this STANOX
+            tiploc = None
+            train_count = 0
+            
+            # Convert stanox_ref to list format if it's a DataFrame
+            if hasattr(stanox_ref, 'to_dict'):
+                stanox_ref_list = stanox_ref.to_dict('records')
+            else:
+                stanox_ref_list = stanox_ref
+                
+            # Find TIPLOC for this STANOX
+            for entry in stanox_ref_list:
+                if str(entry.get("stanox")) == str(st_code):
+                    tiploc = entry.get("tiploc") or entry.get("tiploc_code")
+                    break
+            
+            if tiploc:
+                # Count matching trains in pre-loaded schedule data
+                for s in schedule_data_loaded:
+                    # Navigate to the correct data path: JsonScheduleV1 > schedule_segment > schedule_location
+                    json_schedule = s.get("JsonScheduleV1", {})
+                    schedule_segment = json_schedule.get("schedule_segment", {})
+                    sched_loc = schedule_segment.get("schedule_location", [])
+                    tiploc_codes = {loc.get("tiploc_code") for loc in sched_loc}
+                    if tiploc in tiploc_codes:
+                        train_count += 1
+    else:
         print("Loading data from files (this may take a while)...")
         train_count, tiploc, schedule_data_loaded, stanox_ref, tiploc_to_stanox = load_schedule_data(
             st_code, schedule_data, reference_files
         )
-    else:
-        print("Using pre-loaded data (much faster!)")
     
     if tiploc is None:
         return []  # STANOX not found
@@ -756,3 +785,116 @@ if __name__ == "__main__":
             print(f"Error testing {name}: {e}")
             import traceback
             traceback.print_exc()
+
+
+# =======================================================================================
+# BATCH PROCESSING OPTIMIZATION FUNCTIONS 
+# =======================================================================================
+# These functions optimize batch processing by loading data once and reusing it
+
+def load_schedule_data_once(schedule_data, reference_files):
+    """
+    Load schedule data once to avoid reloading for each station.
+    
+    Args:
+        schedule_data (dict): Dictionary containing schedule data file paths
+        reference_files (dict): Dictionary containing reference file paths
+        
+    Returns:
+        tuple: (schedule_data_loaded, stanox_ref, tiploc_to_stanox)
+    """
+    try:
+        # Load schedule data
+        print("  Loading schedule pickle file...")
+        schedule_data_loaded = pd.read_pickle(schedule_data["toc full"])
+        
+        # Load reference data
+        print("  Loading reference data...")
+        with open(reference_files["all dft categories"], 'r') as f:
+            reference_data = json.load(f)
+        # Convert to DataFrame format expected by process_schedule
+        stanox_ref = pd.DataFrame(reference_data)
+        
+        # Create TIPLOC to STANOX mapping
+        print("  Creating TIPLOC to STANOX mapping...")
+        # Check if the reference data has the expected columns
+        if 'tiploc' in stanox_ref.columns and 'stanox' in stanox_ref.columns:
+            tiploc_to_stanox = dict(zip(stanox_ref['tiploc'], stanox_ref['stanox']))
+        elif 'tiploc_code' in stanox_ref.columns and 'stanox' in stanox_ref.columns:
+            tiploc_to_stanox = dict(zip(stanox_ref['tiploc_code'], stanox_ref['stanox']))
+        else:
+            print(f"  Warning: Expected TIPLOC columns not found. Available columns: {list(stanox_ref.columns)}")
+            tiploc_to_stanox = {}
+        
+        return schedule_data_loaded, stanox_ref, tiploc_to_stanox
+        
+    except Exception as e:
+        print(f"  Error loading schedule data: {e}")
+        return None, None, None
+
+
+def load_incident_data_once(incident_files):
+    """
+    Load all incident data once to avoid reloading for each station.
+    
+    Args:
+        incident_files (dict): Dictionary with period names as keys and file paths as values
+        
+    Returns:
+        dict: Dictionary with period names as keys and loaded DataFrames as values
+    """
+    incident_data_loaded = {}
+    
+    try:
+        for period_name, file_path in incident_files.items():
+            print(f"  Loading incident data for period: {period_name}")
+            df = pd.read_csv(file_path)
+            incident_data_loaded[period_name] = df
+            
+        return incident_data_loaded
+        
+    except Exception as e:
+        print(f"  Error loading incident data: {e}")
+        return {}
+
+
+def process_delays_optimized(incident_data_loaded, st_code, output_dir=None):
+    """
+    Process delays using pre-loaded incident data to avoid file I/O.
+    
+    Args:
+        incident_data_loaded (dict): Pre-loaded incident data by period
+        st_code (str): The station code to filter delays
+        output_dir (str, optional): Directory to save converted JSON files (not used in optimized mode)
+        
+    Returns:
+        dict: Dictionary with period names as keys and processed DataFrames as values
+    """
+    columns_to_remove = [
+        "ATTRIBUTION_STATUS", "INCIDENT_EQUIPMENT", "APPLICABLE_TIMETABLE_FLAG", "TRACTION_TYPE",
+        "TRAILING_LOAD"
+    ]
+    
+    processed_delays = {}
+    
+    # Ensure st_code is an integer for proper comparison with STANOX columns
+    st_code_int = int(st_code)
+    
+    for period_name, df in incident_data_loaded.items():
+        try:
+            # Remove irrelevant columns
+            df_cleaned = df.drop(columns=[col for col in columns_to_remove if col in df.columns], errors='ignore')
+            
+            # Filter rows where START_STANOX or END_STANOX matches st_code
+            mask = (df_cleaned['START_STANOX'] == st_code_int) | (df_cleaned['END_STANOX'] == st_code_int)
+            df_filtered = df_cleaned[mask]
+            
+            if not df_filtered.empty:
+                processed_delays[period_name] = df_filtered
+                print(f"    Processed {len(df_filtered)} delay entries for period {period_name}")
+            
+        except Exception as e:
+            print(f"    Error processing period {period_name}: {e}")
+            continue
+    
+    return processed_delays
