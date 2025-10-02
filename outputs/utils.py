@@ -18,62 +18,96 @@ import glob
 
 def aggregate_view(incident_number, date):
     """
-    Enhanced version that returns detailed data for visualization and creates meaningful charts
-    with fixed 24-hour timeline from midnight to 23:59 for easy day-to-day comparison.
+    Enhanced version that works with the new parquet file structure in station folders
+    and creates meaningful charts with fixed 24-hour timeline from midnight to 23:59 
+    for easy day-to-day comparison.
     """
     
-    # Load all processed data files
-    processed_files = glob.glob('../processed_data/category_a_station_*.pkl')
+    # Find all parquet files in the new structure
+    processed_base = '../processed_data'
     
-    if not processed_files:
-        print("No processed data files found. Please run the preprocessor first.")
+    if not os.path.exists(processed_base):
+        print("No processed_data directory found. Please run the preprocessor first.")
         return None
     
-    all_incidents = []
+    # Get all station directories
+    station_dirs = [d for d in os.listdir(processed_base) 
+                   if os.path.isdir(os.path.join(processed_base, d))]
     
-    # Load data from all processed files
-    for file_path in processed_files:
-        try:
-            with open(file_path, 'rb') as f:
-                station_data = pickle.load(f)
-            
-            if isinstance(station_data, pd.DataFrame):
-                # Handle incident number matching
-                try:
-                    incident_float = float(incident_number)
-                    incident_mask = (station_data['INCIDENT_NUMBER'] == incident_float)
-                except (ValueError, TypeError):
-                    incident_mask = (station_data['INCIDENT_NUMBER'].astype(str) == str(incident_number))
+    print(f"Found {len(station_dirs)} station directories")
+    
+    all_incidents = []
+    files_processed = 0
+    files_with_data = 0
+    
+    # Load data from all station directories
+    for station_dir in station_dirs:
+        station_path = os.path.join(processed_base, station_dir)
+        
+        # Get all parquet files in this station directory (MO, TU, WE, TH, FR, SA, SU)
+        parquet_files = glob.glob(os.path.join(station_path, "*.parquet"))
+        
+        for file_path in parquet_files:
+            files_processed += 1
+            try:
+                # Use fastparquet engine to read the file
+                station_data = pd.read_parquet(file_path, engine='fastparquet')
                 
-                # Filter by date
-                if 'EVENT_DATETIME' in station_data.columns:
-                    station_data['event_date'] = pd.to_datetime(station_data['EVENT_DATETIME'], 
-                                                              format='%d-%b-%Y %H:%M', errors='coerce').dt.date
-                    
-                    # Parse input date
-                    target_date = None
-                    date_formats = ['%d-%b-%Y', '%d-%B-%Y', '%Y-%m-%d', '%m/%d/%Y']
-                    for fmt in date_formats:
-                        try:
-                            target_date = datetime.strptime(date, fmt).date()
-                            break
-                        except ValueError:
+                if isinstance(station_data, pd.DataFrame) and len(station_data) > 0:
+                    # Handle incident number matching - check if INCIDENT_NUMBER column exists and has data
+                    if 'INCIDENT_NUMBER' in station_data.columns:
+                        # Remove rows where INCIDENT_NUMBER is null
+                        station_data = station_data.dropna(subset=['INCIDENT_NUMBER'])
+                        
+                        if len(station_data) == 0:
                             continue
-                    
-                    if target_date is None:
-                        continue
                         
-                    date_mask = (station_data['event_date'] == target_date)
-                    
-                    # Get filtered data
-                    filtered_data = station_data[incident_mask & date_mask]
-                    
-                    if len(filtered_data) > 0:
-                        all_incidents.extend(filtered_data.to_dict('records'))
+                        # Handle incident number matching
+                        try:
+                            incident_float = float(incident_number)
+                            incident_mask = (station_data['INCIDENT_NUMBER'] == incident_float)
+                        except (ValueError, TypeError):
+                            incident_mask = (station_data['INCIDENT_NUMBER'].astype(str) == str(incident_number))
                         
-        except Exception as e:
-            print(f"Error processing file {file_path}: {e}")
-            continue
+                        # Filter by date if EVENT_DATETIME exists
+                        if 'EVENT_DATETIME' in station_data.columns:
+                            # Remove rows where EVENT_DATETIME is null
+                            station_data = station_data.dropna(subset=['EVENT_DATETIME'])
+                            
+                            if len(station_data) == 0:
+                                continue
+                            
+                            # Convert EVENT_DATETIME to datetime and extract date
+                            station_data['event_date'] = pd.to_datetime(station_data['EVENT_DATETIME'], 
+                                                                      format='%d-%b-%Y %H:%M', errors='coerce').dt.date
+                            
+                            # Parse input date
+                            target_date = None
+                            date_formats = ['%d-%b-%Y', '%d-%B-%Y', '%Y-%m-%d', '%m/%d/%Y']
+                            for fmt in date_formats:
+                                try:
+                                    target_date = datetime.strptime(date, fmt).date()
+                                    break
+                                except ValueError:
+                                    continue
+                            
+                            if target_date is None:
+                                continue
+                                
+                            date_mask = (station_data['event_date'] == target_date)
+                            
+                            # Get filtered data
+                            filtered_data = station_data[incident_mask & date_mask]
+                            
+                            if len(filtered_data) > 0:
+                                files_with_data += 1
+                                all_incidents.extend(filtered_data.to_dict('records'))
+                        
+            except Exception as e:
+                print(f"Error processing file {file_path}: {str(e)[:100]}...")
+                continue
+    
+    print(f"Processed {files_processed} files, {files_with_data} files had matching data")
     
     if not all_incidents:
         print(f"No incidents found for INCIDENT_NUMBER {incident_number} on {date}")
@@ -81,6 +115,7 @@ def aggregate_view(incident_number, date):
     
     # Convert to DataFrame for easier manipulation
     df = pd.DataFrame(all_incidents)
+    print(f"Total records found: {len(df)}")
     
     # Parse datetime with time information
     df['full_datetime'] = pd.to_datetime(df['EVENT_DATETIME'], format='%d-%b-%Y %H:%M', errors='coerce')
@@ -115,7 +150,7 @@ def aggregate_view(incident_number, date):
     
     # Create visualizations with three subplots
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(16, 15))
-    fig.suptitle(f'Incident Analysis: {incident_number} on {date}', fontsize=16, fontweight='bold', fontfamily='Arial')
+    fig.suptitle(f'Incident Analysis: {incident_number} on {date}', fontsize=16, fontweight='bold')
     
     # Helper function to add time period shading
     def add_time_shading(ax):
@@ -141,11 +176,11 @@ def aggregate_view(incident_number, date):
         ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
         ax.xaxis.set_minor_locator(mdates.HourLocator(interval=1))
-        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, fontsize=16, fontfamily='Arial')
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45)
         ax.grid(True, alpha=0.3)
     
     # Chart 1: Hourly Delay Totals (24-Hour View)
-    ax1.set_title('Hourly Delay Totals (24-Hour View)', fontsize=16, pad=20, fontfamily='Arial')
+    ax1.set_title('Hourly Delay Totals (24-Hour View)', fontsize=14, pad=20)
     
     # Filter out rows with no delays and group by hour
     delay_data = df[df['PFPI_MINUTES'] > 0].copy()
@@ -172,7 +207,7 @@ def aggregate_view(incident_number, date):
     for i, (dt, val) in enumerate(zip(hour_datetimes, hour_values)):
         if val > 0:
             ax1.text(dt, val + max_val * 0.01, f'{val:.0f}', 
-                    ha='center', va='bottom', fontsize=16, fontweight='bold', fontfamily='Arial')
+                    ha='center', va='bottom', fontsize=10, fontweight='bold')
     
     # Add INCIDENT_START_DATETIME markers
     if 'start_chart_datetime' in df.columns:
@@ -185,16 +220,15 @@ def aggregate_view(incident_number, date):
             ax1.axvline(x=incident_start_times[0], color='red', linestyle='--', linewidth=3, alpha=0.9, 
                        label='Incident Start Time')
     
-    ax1.legend(fontsize=16)
+    ax1.legend()
     
-    ax1.set_ylabel('Total Delay Minutes per Hour', fontsize=16, fontfamily='Arial')
-    ax1.set_xlabel('Hour of Day', fontsize=16, fontfamily='Arial')
-    ax1.tick_params(axis='y', labelsize=16)
+    ax1.set_ylabel('Total Delay Minutes per Hour', fontsize=12)
+    ax1.set_xlabel('Hour of Day', fontsize=12)
     format_time_axis(ax1)
     add_time_shading(ax1)
     
     # Chart 2: Delay Severity Distribution
-    ax2.set_title('Delay Severity Distribution (Count by Severity Range)', fontsize=16, pad=20, fontfamily='Arial')
+    ax2.set_title('Delay Severity Distribution (Count by Severity Range)', fontsize=14, pad=20)
     
     if len(delay_data) > 0:
         # Create severity ranges
@@ -216,26 +250,25 @@ def aggregate_view(incident_number, date):
         for bar, count in zip(bars, counts):
             if count > 0:
                 ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(counts) * 0.01,
-                        f'{count}', ha='center', va='bottom', fontsize=16, fontweight='bold', fontfamily='Arial')
+                        f'{count}', ha='center', va='bottom', fontsize=11, fontweight='bold')
         
-        ax2.set_ylabel('Number of Delay Events', fontsize=16, fontfamily='Arial')
-        ax2.set_xlabel('Delay Severity Range', fontsize=16, fontfamily='Arial')
-        ax2.tick_params(axis='both', labelsize=16)
+        ax2.set_ylabel('Number of Delay Events', fontsize=12)
+        ax2.set_xlabel('Delay Severity Range', fontsize=12)
         
         # Add total delay info
         total_events = len(delay_data)
         avg_delay = delay_values.mean()
         ax2.text(0.02, 0.98, f'Total Events: {total_events}\nAverage Delay: {avg_delay:.1f} min', 
-                transform=ax2.transAxes, verticalalignment='top', fontsize=16, fontfamily='Arial',
+                transform=ax2.transAxes, verticalalignment='top', fontsize=10,
                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
     else:
         ax2.text(0.5, 0.5, 'No delay events found', transform=ax2.transAxes, 
-                ha='center', va='center', fontsize=16, fontfamily='Arial')
+                ha='center', va='center', fontsize=14)
     
     ax2.grid(True, alpha=0.3, axis='y')
     
     # Chart 3: Event Timeline (Delays and Cancellations)
-    ax3.set_title('Event Timeline: Delays and Cancellations (24-Hour View)', fontsize=16, pad=20, fontfamily='Arial')
+    ax3.set_title('Event Timeline: Delays and Cancellations (24-Hour View)', fontsize=14, pad=20)
     
     # Separate delays and cancellations
     delays = df[df['EVENT_TYPE'] != 'C'].copy()
@@ -257,7 +290,7 @@ def aggregate_view(incident_number, date):
             ax3.annotate('CANCELLED', 
                        (row['chart_datetime'], row['PFPI_MINUTES']), 
                        xytext=(5, 5), textcoords='offset points',
-                       fontsize=16, color='red', weight='bold', fontfamily='Arial')
+                       fontsize=9, color='red', weight='bold')
     
     # Add INCIDENT_START_DATETIME markers
     if 'start_chart_datetime' in df.columns:
@@ -273,11 +306,10 @@ def aggregate_view(incident_number, date):
     # Always show legend if there are any elements
     handles, labels = ax3.get_legend_handles_labels()
     if handles:
-        ax3.legend(fontsize=16)
+        ax3.legend()
     
-    ax3.set_ylabel('Delay Minutes', fontsize=16, fontfamily='Arial')
-    ax3.set_xlabel('Time of Day (24-Hour Timeline)', fontsize=16, fontfamily='Arial')
-    ax3.tick_params(axis='y', labelsize=16)
+    ax3.set_ylabel('Delay Minutes', fontsize=12)
+    ax3.set_xlabel('Time of Day (24-Hour Timeline)', fontsize=12)
     format_time_axis(ax3)
     add_time_shading(ax3)
     
@@ -321,6 +353,8 @@ def aggregate_view(incident_number, date):
         "Total Delay Minutes": total_delay_minutes,
         "Total Cancellations": total_cancellations,
         "Total Records Found": len(df),
+        "Files Processed": files_processed,
+        "Files with Data": files_with_data,
         "Incident Number": incident_number,
         "Date": date,
         "Time Range": f"{df['full_datetime'].min().strftime('%H:%M')} - {df['full_datetime'].max().strftime('%H:%M')}" if len(df) > 0 else "N/A",
@@ -330,7 +364,6 @@ def aggregate_view(incident_number, date):
     }
     
     return summary
-
 
 
 # for incident view:
