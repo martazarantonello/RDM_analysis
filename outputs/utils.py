@@ -1,4 +1,10 @@
 # UTILS FOR GRAPHS!!
+# 
+# UPDATED: Both aggregate_view and incident_view functions now use the NEW parquet file structure:
+# - File structure: processed_data/{station_id}/{day}.parquet (e.g., processed_data/11271/MO.parquet)
+# - Uses fastparquet engine to handle parquet files with corruption issues
+# - incident_view uses SMART LOADING: only loads files for the specific day of week (efficient)
+# - aggregate_view loads ALL files for comprehensive analysis (less efficient but thorough)
 
 import json
 import pickle
@@ -399,9 +405,28 @@ def incident_view(incident_code, incident_date, analysis_date, analysis_hhmm, pe
     day_mapping = {0: 'MO', 1: 'TU', 2: 'WE', 3: 'TH', 4: 'FR', 5: 'SA', 6: 'SU'}
     analysis_day_suffix = day_mapping[analysis_datetime.weekday()]
     
-    # Load station files for the analysis day of week
-    processed_files = glob.glob('processed_data/*.pkl')
-    station_files = [f for f in processed_files if 'summary' not in f and 'station_' in f and f.endswith(f'_{analysis_day_suffix}.pkl')]
+    # Load station files for the analysis day of week using NEW parquet structure
+    processed_base = 'processed_data'
+    
+    if not os.path.exists(processed_base):
+        print("No processed_data directory found. Please run the preprocessor first.")
+        return pd.DataFrame(), None, None
+    
+    # Get all station directories
+    station_dirs = [d for d in os.listdir(processed_base) 
+                   if os.path.isdir(os.path.join(processed_base, d))]
+    
+    # Build list of files to load (only for the specific day)
+    target_files = []
+    for station_dir in station_dirs:
+        station_path = os.path.join(processed_base, station_dir)
+        day_file = os.path.join(station_path, f"{analysis_day_suffix}.parquet")
+        if os.path.exists(day_file):
+            target_files.append((day_file, station_dir))
+    
+    print(f"Analyzing incident {incident_code} (started {incident_date})")
+    print(f"Analysis period: {analysis_period_str}")
+    print(f"Loading {len(target_files)} station files for {analysis_day_suffix}")
     
     # Find incident start time and collect data from each station
     incident_start_time = None
@@ -410,20 +435,10 @@ def incident_view(incident_code, incident_date, analysis_date, analysis_hhmm, pe
     incident_reason = None
     station_results = []  # List to store results from each station
     
-    print(f"Analyzing incident {incident_code} (started {incident_date})")
-    print(f"Analysis period: {analysis_period_str}")
-    
-    for file in station_files:
-        # Extract station code from filename
-        filename = file.split('\\')[-1]
-        parts = filename.split('_')
-        if len(parts) >= 4:
-            station_code = parts[3]
-        else:
-            continue
-            
+    for file_path, station_code in target_files:
         try:
-            df = pd.read_pickle(file)
+            # Use fastparquet engine to read the file
+            df = pd.read_parquet(file_path, engine='fastparquet')
             if not isinstance(df, pd.DataFrame):
                 continue
                 
@@ -638,12 +653,33 @@ def incident_view_html(incident_code, incident_date, analysis_date, analysis_hhm
     str: HTML content of the interactive map
     """
     
-    # Load station coordinates data
+    # Load station coordinates data from comprehensive JSON file
     try:
         from data.reference import reference_files
-        stations_coords = pd.read_pickle(reference_files["category A stations"])
+        import json
+        
+        file_path = reference_files["all dft categories"]
+        print(f"Attempting to load station coordinates from: {file_path}")
+        
+        if not os.path.exists(file_path):
+            print(f"File does not exist: {file_path}")
+            print("Available reference files:", list(reference_files.keys()))
+            return None
+            
+        with open(file_path, 'r') as f:
+            stations_coords_data = json.load(f)
+            
+        print(f"Successfully loaded {len(stations_coords_data)} station records")
+        
+    except KeyError as e:
+        print(f"Reference file key not found: {e}")
+        print("Available reference files:", list(reference_files.keys()))
+        return None
     except FileNotFoundError:
-        print("Station coordinates not available. Cannot create map.")
+        print("Station coordinates file not available. Cannot create map.")
+        return None
+    except Exception as e:
+        print(f"Error loading station coordinates: {e}")
         return None
     
     # Parse analysis parameters
@@ -670,20 +706,52 @@ def incident_view_html(incident_code, incident_date, analysis_date, analysis_hhm
     day_mapping = {0: 'MO', 1: 'TU', 2: 'WE', 3: 'TH', 4: 'FR', 5: 'SA', 6: 'SU'}
     analysis_day_suffix = day_mapping[analysis_datetime.weekday()]
     
-    # Load station files for the analysis day
-    processed_files = glob.glob('processed_data/*.pkl')
-    station_files = [f for f in processed_files if 'summary' not in f and 'station_' in f and f.endswith(f'_{analysis_day_suffix}.pkl')]
+    # Load station files for the analysis day using NEW parquet structure
+    processed_base = 'processed_data'
     
-    # Create station coordinates mapping
+    if not os.path.exists(processed_base):
+        print("No processed_data directory found. Please run the preprocessor first.")
+        return None
+    
+    # Get all station directories
+    station_dirs = [d for d in os.listdir(processed_base) 
+                   if os.path.isdir(os.path.join(processed_base, d))]
+    
+    # Build list of files to load (only for the specific day)
+    target_files = []
+    for station_dir in station_dirs:
+        station_path = os.path.join(processed_base, station_dir)
+        day_file = os.path.join(station_path, f"{analysis_day_suffix}.parquet")
+        if os.path.exists(day_file):
+            target_files.append((day_file, station_dir))
+    
+    print(f"Loading {len(target_files)} station files for {analysis_day_suffix}")
+    
+    # Create station coordinates mapping from JSON data
     station_coords_map = {}
-    for _, row in stations_coords.iterrows():
-        station_id = str(row['stanox'])
-        if pd.notna(row['latitude']) and pd.notna(row['longitude']):
-            station_coords_map[station_id] = {
-                'name': row['description'],
-                'lat': float(row['latitude']),
-                'lon': float(row['longitude'])
-            }
+    for station in stations_coords_data:
+        if isinstance(station, dict):
+            station_id = str(station.get('stanox', ''))
+            latitude = station.get('latitude')
+            longitude = station.get('longitude')
+            description = station.get('description', 'Unknown Station')
+            
+            # Check if coordinates are valid (coordinates may be strings that can be converted to float)
+            if (station_id and 
+                latitude is not None and longitude is not None and
+                str(latitude).replace('.', '').replace('-', '').isdigit() and 
+                str(longitude).replace('.', '').replace('-', '').isdigit()):
+                try:
+                    station_coords_map[station_id] = {
+                        'name': description,
+                        'lat': float(latitude),
+                        'lon': float(longitude)
+                    }
+                except ValueError:
+                    # Skip station if coordinate conversion fails
+                    continue
+    
+    print(f"Found coordinates for {len(station_coords_map)} stations")
     
     # Collect delay timeline data for all stations
     station_timeline_data = {}  # {station_code: [(datetime, cumulative_delay_minutes)]}
@@ -691,19 +759,19 @@ def incident_view_html(incident_code, incident_date, analysis_date, analysis_hhm
     incident_reason = None
     incident_start_time = None
     
-    for file in station_files:
-        filename = file.split('\\')[-1]
-        parts = filename.split('_')
-        if len(parts) >= 4:
-            station_code = parts[3]
-        else:
-            continue
-            
+    # Debug: show first few station codes we're looking for
+    debug_station_codes = [station_code for _, station_code in target_files[:5]]
+    print(f"Sample station codes from processed data: {debug_station_codes}")
+    debug_coord_keys = list(station_coords_map.keys())[:5]
+    print(f"Sample station IDs from coordinates: {debug_coord_keys}")
+    
+    for file_path, station_code in target_files:
         if station_code not in station_coords_map:
             continue  # Skip stations without coordinates
             
         try:
-            df = pd.read_pickle(file)
+            # Use fastparquet engine to read the file
+            df = pd.read_parquet(file_path, engine='fastparquet')
             if not isinstance(df, pd.DataFrame):
                 continue
                 
@@ -897,22 +965,23 @@ def incident_view_html(incident_code, incident_date, analysis_date, analysis_hhm
         .delay-high {{ background: #e74c3c; color: white; }}
         .delay-extreme {{ background: #8e44ad; color: white; }}
         .legend {{ 
-            position: absolute; 
-            top: 10px; 
-            right: 10px; 
-            background: rgba(255,255,255,0.9); 
+            background: rgba(255,255,255,0.95); 
             padding: 10px; 
             border-radius: 8px;
-            z-index: 1000;
+            margin: 10px 0;
             font-size: 12px;
+            color: #333;
         }}
-        .legend-item {{ margin: 3px 0; }}
+        .legend-item {{ 
+            display: inline-block;
+            margin: 3px 8px 3px 0; 
+        }}
         .legend-color {{ 
             display: inline-block; 
             width: 15px; 
             height: 15px; 
             border-radius: 50%; 
-            margin-right: 8px; 
+            margin-right: 5px; 
             vertical-align: middle;
         }}
     </style>
@@ -920,13 +989,6 @@ def incident_view_html(incident_code, incident_date, analysis_date, analysis_hhm
 <body>
     <!-- Map Container -->
     <div id="map">
-        <div class="legend">
-            <strong>Interval Delay Minutes</strong>
-            <div class="legend-item"><span class="legend-color" style="background: #2ecc71;"></span>1-15 min</div>
-            <div class="legend-item"><span class="legend-color" style="background: #f39c12;"></span>16-45 min</div>
-            <div class="legend-item"><span class="legend-color" style="background: #e74c3c;"></span>46-90 min</div>
-            <div class="legend-item"><span class="legend-color" style="background: #8e44ad;"></span>90+ min</div>
-        </div>
     </div>
     
     <!-- Controls Container -->
@@ -944,6 +1006,14 @@ def incident_view_html(incident_code, incident_date, analysis_date, analysis_hhm
                 <button class="btn" onclick="playTimeline()">▶ Play</button>
                 <button class="btn" onclick="pauseTimeline()">⏸ Pause</button>
                 <button class="btn" onclick="resetTimeline()">⏮ Reset</button>
+            </div>
+            
+            <div class="legend">
+                <strong>Interval Delay Minutes:</strong>
+                <div class="legend-item"><span class="legend-color" style="background: #2ecc71;"></span>1-15 min</div>
+                <div class="legend-item"><span class="legend-color" style="background: #f39c12;"></span>16-45 min</div>
+                <div class="legend-item"><span class="legend-color" style="background: #e74c3c;"></span>46-90 min</div>
+                <div class="legend-item"><span class="legend-color" style="background: #8e44ad;"></span>90+ min</div>
             </div>
             
             <div id="station-info">No delays at this time</div>
@@ -1159,6 +1229,1367 @@ def incident_view_html(incident_code, incident_date, analysis_date, analysis_hhm
         print(f"Stations mapped: {len([s for s in station_timeline_data.keys() if s in station_coords_map])}")
         print(f" Features: Play/Pause controls, Color-coded delays, Interval-specific timeline")
         print(" Open the HTML file in your browser to explore the dynamic timeline!")
+        
+    except Exception as e:
+        print(f"Error saving file: {e}")
+    
+    return html_content
+    num_intervals = period_minutes // interval_minutes
+    if period_minutes % interval_minutes != 0:
+        num_intervals += 1
+    
+    print(f"📊 Creating {num_intervals} time intervals of {interval_minutes} minutes each")
+    
+    # Load coordinates for ALL stations to show the complete network
+    print("�️ Loading coordinates for ALL network stations...")
+    coord_file_path = reference_files["all dft categories"]
+    with open(coord_file_path, 'r') as f:
+        stations_coords_data = json.load(f)
+    
+    # Create station coordinates mapping for stations with valid DFT categories only
+    station_coords_map = {}
+    valid_categories = {'A', 'B', 'C1', 'C2'}
+    
+    for station in stations_coords_data:
+        if isinstance(station, dict):
+            station_id = str(station.get('stanox', ''))
+            dft_category = station.get('dft_category', '')
+            latitude = station.get('latitude')
+            longitude = station.get('longitude')
+            description = station.get('description', 'Unknown Station')
+            
+            # Only include stations with valid DFT categories (A, B, C1, C2) and coordinates
+            if (dft_category in valid_categories and 
+                latitude is not None and longitude is not None and
+                str(latitude).replace('.', '').replace('-', '').isdigit() and 
+                str(longitude).replace('.', '').replace('-', '').isdigit()):
+                try:
+                    station_coords_map[station_id] = {
+                        'name': description,
+                        'lat': float(latitude),
+                        'lon': float(longitude),
+                        'category': dft_category
+                    }
+                except ValueError:
+                    continue
+    
+    print(f"📍 Loaded coordinates for {len(station_coords_map)} network stations (A/B/C1/C2 categories)")
+    
+    # Find affected stations across all intervals for delay data
+    print("🔍 Finding affected stations with delays...")
+    all_affected_stations = set()
+    
+    for i in range(num_intervals):
+        interval_start = analysis_datetime + timedelta(minutes=i * interval_minutes)
+        interval_start_str = interval_start.strftime('%H%M')
+        actual_interval_minutes = min(interval_minutes, period_minutes - (i * interval_minutes))
+        
+        # Get delay data for this interval to find affected stations
+        temp_data, _, _ = incident_view(incident_code, incident_date, analysis_date, interval_start_str, actual_interval_minutes)
+        if not temp_data.empty:
+            affected_in_interval = temp_data[(temp_data['DELAYED_TRAINS_OUT'] > 0) | (temp_data['DELAYED_TRAINS_IN'] > 0)]
+            for _, row in affected_in_interval.iterrows():
+                all_affected_stations.add(str(row['STATION_CODE']))
+    
+    print(f"🚉 Found {len(all_affected_stations)} stations with delays across all intervals")
+    
+    # Get incident location information for the 'X' marker
+    incident_location = None
+    incident_section_code = None
+    incident_station_name = None
+    
+    # Get incident section code by replicating the logic from incident_view function
+    # Look through the processed data to find the incident section code
+    processed_base = 'processed_data'
+    
+    if os.path.exists(processed_base):
+        # Get day of week for analysis date
+        day_mapping = {0: 'MO', 1: 'TU', 2: 'WE', 3: 'TH', 4: 'FR', 5: 'SA', 6: 'SU'}
+        analysis_day_suffix = day_mapping[analysis_datetime.weekday()]
+        
+        # Get all station directories and look for the incident
+        station_dirs = [d for d in os.listdir(processed_base) 
+                       if os.path.isdir(os.path.join(processed_base, d))]
+        
+        for station_dir in station_dirs[:5]:  # Just check first few stations to find section code
+            station_path = os.path.join(processed_base, station_dir)
+            day_file = os.path.join(station_path, f"{analysis_day_suffix}.parquet")
+            if os.path.exists(day_file):
+                try:
+                    df = pd.read_parquet(day_file, engine='fastparquet')
+                    incident_data = df[df['INCIDENT_NUMBER'] == incident_code].copy()
+                    if not incident_data.empty:
+                        incident_data['incident_date'] = incident_data['INCIDENT_START_DATETIME'].str.split(' ').str[0]
+                        incident_records = incident_data[incident_data['incident_date'] == incident_date].copy()
+                        if not incident_records.empty:
+                            incident_section_code = incident_records['SECTION_CODE'].iloc[0]
+                            break
+                except:
+                    continue
+    
+    # Find coordinates for incident location using STANOX code(s)
+    # Handle both single STANOX codes and colon-separated section codes (e.g., "04303:04730")
+    incident_locations = []  # Store multiple locations if section contains multiple STANOX codes
+    
+    if incident_section_code:
+        # Split section code by colon to handle cases like "04303:04730"
+        stanox_codes = [code.strip() for code in str(incident_section_code).split(':')]
+        
+        for stanox_code in stanox_codes:
+            for station in stations_coords_data:
+                if isinstance(station, dict) and str(station.get('stanox')) == str(stanox_code):
+                    latitude = station.get('latitude')
+                    longitude = station.get('longitude')
+                    if (latitude is not None and longitude is not None and
+                        str(latitude).replace('.', '').replace('-', '').isdigit() and 
+                        str(longitude).replace('.', '').replace('-', '').isdigit()):
+                        try:
+                            location_info = {
+                                'lat': float(latitude),
+                                'lon': float(longitude),
+                                'name': station.get('description', 'Incident Location'),
+                                'stanox': stanox_code
+                            }
+                            incident_locations.append(location_info)
+                            station_name = station.get('description', 'Unknown')
+                            print(f"📍 Found incident location: {station_name} ({stanox_code})")
+                        except ValueError:
+                            continue
+                    break  # Found this STANOX code, move to next one
+        
+        # For backward compatibility, set primary incident_location to first found location
+        if incident_locations:
+            incident_location = incident_locations[0]
+            incident_station_name = incident_location['name']
+    
+    # Create time intervals and get delay data for each interval using incident_view()
+    time_intervals = []
+    interval_heatmap_data = []  # Store heat map data for each interval
+    
+    for i in range(num_intervals):
+        interval_start = analysis_datetime + timedelta(minutes=i * interval_minutes)
+        interval_end = interval_start + timedelta(minutes=interval_minutes)
+        
+        # Calculate how many minutes this interval represents
+        actual_interval_minutes = min(interval_minutes, period_minutes - (i * interval_minutes))
+        
+        time_intervals.append({
+            'start': interval_start,
+            'end': interval_end,
+            'label': f"{interval_start.strftime('%H:%M')}-{interval_end.strftime('%H:%M')}"
+        })
+        
+        # Get delay data for this specific interval using incident_view
+        interval_start_str = interval_start.strftime('%H%M')
+        interval_delay_data, _, _ = incident_view(
+            incident_code, 
+            incident_date, 
+            analysis_date, 
+            interval_start_str, 
+            actual_interval_minutes
+        )
+        
+        # Convert interval delay data to heat map points
+        interval_points = []
+        if not interval_delay_data.empty:
+            for _, row in interval_delay_data.iterrows():
+                station_code = str(row['STATION_CODE'])
+                if station_code in station_coords_map:
+                    coords = station_coords_map[station_code]
+                    
+                    # Calculate average delay minutes per station for this interval
+                    total_delayed_trains = row['DELAYED_TRAINS_OUT'] + row['DELAYED_TRAINS_IN']
+                    
+                    if total_delayed_trains > 0:  # Only include stations with delays
+                        # Get delay minutes (these are lists, so we need to sum them)
+                        delay_minutes_out = row['DELAY_MINUTES_OUT'] if isinstance(row['DELAY_MINUTES_OUT'], list) else []
+                        delay_minutes_in = row['DELAY_MINUTES_IN'] if isinstance(row['DELAY_MINUTES_IN'], list) else []
+                        
+                        # Calculate total delay minutes for this station in this interval
+                        total_delay_minutes = sum(delay_minutes_out) + sum(delay_minutes_in)
+                        
+                        # Calculate average delay per train at this station
+                        average_delay_minutes = total_delay_minutes / total_delayed_trains if total_delayed_trains > 0 else 0
+                        
+                        if average_delay_minutes > 0:  # Only include if there are actual delay minutes
+                            interval_points.append({
+                                'lat': coords['lat'],
+                                'lng': coords['lon'],
+                                'weight': average_delay_minutes,  # Now using average delay minutes
+                                'name': coords['name'],
+                                'delayed_trains': total_delayed_trains,
+                                'total_delay_minutes': total_delay_minutes
+                            })
+        
+        interval_heatmap_data.append(interval_points)
+        print(f"  Interval {i+1}: {len(interval_points)} stations with delays")
+    
+    print(f"🚉 Processed {len(interval_heatmap_data)} time intervals for animation")
+    
+    # Generate filename if not provided
+    if output_file is None:
+        output_file = f'animated_heatmap_incident_{incident_code}_{analysis_date.replace("-", "_")}_{analysis_hhmm}_{period_minutes}min_interval{interval_minutes}min.html'
+    
+    # Create time step data for JavaScript
+    time_steps_js = []
+    for i, interval in enumerate(time_intervals):
+        time_steps_js.append(f"'{interval['label']}'")
+    
+    # Create heat map data for JavaScript
+    heatmap_data_js = []
+    for interval_points in interval_heatmap_data:
+        if interval_points:
+            points_js = []
+            for point in interval_points:
+                points_js.append(f"[{point['lat']}, {point['lng']}, {point['weight']}]")
+            heatmap_data_js.append(f"[{', '.join(points_js)}]")
+        else:
+            heatmap_data_js.append("[]")
+    
+    # Calculate global max weight for consistent scaling across all intervals
+    max_weight = 0
+    total_stations_affected = set()
+    
+    for interval_points in interval_heatmap_data:
+        for point in interval_points:
+            max_weight = max(max_weight, point['weight'])
+            total_stations_affected.add(point['name'])
+    
+    if max_weight == 0:
+        print("⚠️ No delay data found for heat map animation")
+        return None
+    
+    print(f"🚉 Found {len(total_stations_affected)} unique stations affected across all intervals")
+    print(f"📈 Maximum delay weight: {max_weight:.1f} minutes")
+    
+    # Generate filename if not provided
+    if output_file is None:
+        output_file = f'heatmap_incident_{incident_code}_{analysis_date.replace("-", "_")}_{analysis_hhmm}_{period_minutes}min.html'
+    
+    # Create JavaScript for ALL station markers (grey dots for unaffected stations)
+    all_stations_js = []
+    for station_id, coords in station_coords_map.items():
+        all_stations_js.append(f"[{coords['lat']}, {coords['lon']}, '{coords['name']}', '{station_id}']")
+    
+    stations_js_array = "[" + ", ".join(all_stations_js) + "]"
+    
+    # Create incident marker JavaScript for all found incident locations
+    incident_marker_js = ""
+    if incident_locations:
+        incident_marker_js = "// Add incident location markers with clean 'X' symbol\n"
+        for i, location in enumerate(incident_locations):
+            incident_marker_js += f'''
+        var incidentMarker{i} = L.marker([{location['lat']}, {location['lon']}], {{
+            icon: L.divIcon({{
+                className: 'incident-marker-clean',
+                html: '<div style="color: red; font-size: 20px; font-weight: bold; font-family: Arial, sans-serif;">✕</div>',
+                iconSize: [20, 20],
+                iconAnchor: [10, 10]
+            }})
+        }}).addTo(map);
+        
+        incidentMarker{i}.bindPopup('<b>Incident Location</b><br>Station: {location['name']}<br>STANOX: {location['stanox']}<br>Section Code: {incident_section_code}');
+        '''
+    
+    # Create animated HTML with heat map timeline controls
+    html_content = f'''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Animated Railway Delay Heat Map - Incident {incident_code}</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" 
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet.heat@0.2.0/dist/leaflet-heat.min.js"></script>
+    <style>
+        body {{ margin: 0; padding: 0; font-family: Arial, sans-serif; }}
+        #map {{ height: 100vh; width: 100vw; }}
+        
+        /* Enhanced heat map visibility */
+        .leaflet-heatmap-layer {{
+            opacity: 0.8 !important;
+        }}
+        
+        /* Incident marker styling */
+        .incident-marker {{
+            z-index: 1000 !important;
+        }}
+        .incident-marker div {{
+            box-shadow: 0 2px 6px rgba(0,0,0,0.5) !important;
+        }}
+        
+        .controls-panel {{
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            right: 20px;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }}
+        .controls-top {{
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 20px;
+        }}
+        .info-section {{
+            flex: 1;
+            font-size: 14px;
+        }}
+        .legend-section {{
+            flex: 1;
+            font-size: 12px;
+        }}
+        .controls-bottom {{
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }}
+        .time-controls {{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }}
+        .time-slider {{
+            flex: 1;
+            margin: 0;
+        }}
+        .play-button {{
+            background: #007cba;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+        }}
+        .play-button:hover {{
+            background: #005a87;
+        }}
+        .current-time {{
+            font-weight: bold;
+            color: #007cba;
+            margin: 0;
+        }}
+        .legend-title {{
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #333;
+        }}
+        .legend-item {{
+            display: flex;
+            align-items: center;
+            margin: 2px 0;
+            font-size: 11px;
+        }}
+        .legend-color {{
+            width: 16px;
+            height: 16px;
+            margin-right: 6px;
+            border-radius: 2px;
+            margin-right: 8px;
+            border-radius: 3px;
+        }}
+        .title {{
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #333;
+        }}
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <div class="controls-panel">
+        <div class="controls-top">
+            <div class="info-section">
+                <div style="font-size: 16px; font-weight: bold; margin-bottom: 10px; color: #333;">🔥 Railway Delay Heat Map - Incident {incident_code}</div>
+                <div><strong>Period:</strong> {analysis_date} {analysis_hhmm[:2]}:{analysis_hhmm[2:]} ({period_minutes} min)</div>
+                <div><strong>Intervals:</strong> {num_intervals} × {interval_minutes} min</div>
+                <div><strong>Stations Affected:</strong> {len(total_stations_affected)} | <strong>Max Avg Delay:</strong> {max_weight:.1f} minutes</div>
+                <div style="margin-top: 8px; font-size: 12px; color: #666;">
+                    Shows average delay minutes per station per interval across the entire network
+                </div>
+            </div>
+            <div class="legend-section">
+                <div class="legend-title">Delay Intensity Legend</div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #32CD32;"></div>
+                    <span>Minor (1-5 min)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #FFD700;"></div>
+                    <span>Moderate (6-15 min)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #FF8C00;"></div>
+                    <span>Significant (16-30 min)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #FF0000;"></div>
+                    <span>Major (31-60 min)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #8B0000;"></div>
+                    <span>Severe (61-120 min)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #8A2BE2;"></div>
+                    <span>Critical (120+ min)</span>
+                </div>
+                <div style="font-size: 10px; margin-top: 5px; color: #666;">
+                    Red X = Incident Location
+                </div>
+            </div>
+        </div>
+        <div class="controls-bottom">
+            <div class="current-time" id="currentTime">Time: Loading...</div>
+            <div class="time-controls">
+                <button id="playButton" class="play-button">▶ Play Animation</button>
+                <input type="range" id="timeSlider" class="time-slider" min="0" max="{num_intervals-1}" value="0">
+                <span id="intervalInfo">Interval 1 of {num_intervals}</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize map centered on UK
+        var map = L.map('map').setView([54.5, -2.5], 6);
+
+        // Add OpenStreetMap tiles
+        L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+            attribution: '© OpenStreetMap contributors'
+        }}).addTo(map);
+
+        // Time interval data for animation
+        var timeSteps = [{', '.join(time_steps_js)}];
+        var heatmapDataByInterval = [{', '.join(heatmap_data_js)}];
+        var currentIndex = 0;
+        var isPlaying = false;
+        var playInterval;
+        
+        // Create heat layer (initially empty) with precise, less spread-out settings
+        // Using same color grading as aggregate_view function's delay severity chart
+        var heat = L.heatLayer([], {{
+            radius: 18,    // Slightly larger radius for better visibility
+            blur: 6,       // Less blur for sharper edges
+            maxZoom: 17,
+            max: 1.0,      // Normalize to 1.0 for better visibility
+            minOpacity: 0.3,  // Minimum opacity to ensure visibility
+            gradient: {{
+                0.0: '#32CD32',       // Bright lime green for minor delays (1-5 min)
+                0.17: '#FFD700',      // Bright gold for moderate delays (6-15 min)
+                0.33: '#FF8C00',      // Bright dark orange for significant delays (16-30 min)
+                0.50: '#FF0000',      // Bright red for major delays (31-60 min)
+                0.67: '#8B0000',      // Dark red for severe delays (61-120 min)
+                1.0: '#8A2BE2'        // Blue violet for critical delays (120+ min)
+            }}
+        }}).addTo(map);
+        
+        // Add ALL network stations as grey dots
+        var allStations = {stations_js_array};
+        var stationMarkers = [];
+        
+        allStations.forEach(function(station) {{
+            var marker = L.circleMarker([station[0], station[1]], {{
+                radius: 2,
+                fillColor: '#808080',
+                color: '#606060',
+                weight: 1,
+                opacity: 0.6,
+                fillOpacity: 0.4
+            }}).addTo(map);
+            
+            marker.bindPopup('<b>' + station[2] + '</b><br>Station ID: ' + station[3] + '<br>Status: No delays');
+            stationMarkers.push(marker);
+        }});
+        
+        console.log('Added', stationMarkers.length, 'network station markers');
+        
+        {incident_marker_js}
+        
+        // Function to update heat map for specific time interval
+        function updateHeatMap(index) {{
+            if (index >= 0 && index < heatmapDataByInterval.length) {{
+                var data = heatmapDataByInterval[index];
+                console.log('Updating heat map for interval', index, 'with', data.length, 'points:', data);
+                heat.setLatLngs(data);
+                document.getElementById('currentTime').textContent = 'Time: ' + timeSteps[index];
+                var avgDelay = data.length > 0 ? (data.reduce((sum, point) => sum + point[2], 0) / data.length) : 0;
+                document.getElementById('intervalInfo').textContent = 'Interval ' + (index + 1) + ' of ' + timeSteps.length + ' (' + data.length + ' stations, avg: ' + avgDelay.toFixed(1) + ' min)';
+                document.getElementById('timeSlider').value = index;
+                currentIndex = index;
+            }}
+        }}
+        
+        // Animation controls
+        function playAnimation() {{
+            if (isPlaying) {{
+                clearInterval(playInterval);
+                isPlaying = false;
+                document.getElementById('playButton').textContent = '▶ Play Animation';
+            }} else {{
+                isPlaying = true;
+                document.getElementById('playButton').textContent = '⏸ Pause Animation';
+                playInterval = setInterval(function() {{
+                    currentIndex++;
+                    if (currentIndex >= timeSteps.length) {{
+                        currentIndex = 0;
+                    }}
+                    updateHeatMap(currentIndex);
+                }}, 1500); // Change interval every 1.5 seconds
+            }}
+        }}
+        
+        // Add discrete reference markers (small, subtle dots)
+        var referenceMarkers = L.layerGroup();
+        if (heatmapDataByInterval.length > 0 && heatmapDataByInterval[0].length > 0) {{
+            heatmapDataByInterval[0].forEach(function(point, i) {{
+                L.circleMarker([point[0], point[1]], {{
+                    radius: 2,           // Much smaller
+                    fillColor: '#333',   // Dark gray instead of red
+                    color: '#666',       // Gray border
+                    weight: 1,           // Thin border
+                    opacity: 0.6,        // Semi-transparent
+                    fillOpacity: 0.4     // More subtle
+                }}).bindPopup('Station ' + (i+1) + '<br>Avg Delay: ' + point[2].toFixed(1) + ' min').addTo(referenceMarkers);
+            }});
+            referenceMarkers.addTo(map);
+            console.log('Added', heatmapDataByInterval[0].length, 'discrete reference markers');
+        }}
+        
+        // Check if required libraries are loaded
+        console.log('🔍 Checking libraries...');
+        console.log('Leaflet loaded:', typeof L !== 'undefined');
+        console.log('Heat layer available:', typeof L !== 'undefined' && typeof L.heatLayer !== 'undefined');
+        
+        if (typeof L === 'undefined') {{
+            document.getElementById('currentTime').textContent = 'Error: Leaflet library failed to load';
+            return;
+        }}
+        
+        if (typeof L.heatLayer === 'undefined') {{
+            document.getElementById('currentTime').textContent = 'Error: Heat map plugin failed to load';
+            return;
+        }}
+        
+        // Initialize function to set up the heat map
+        function initializeHeatMap() {{
+            console.log('🔍 Initializing heat map...');
+            console.log('Time steps:', timeSteps.length);
+            console.log('Heatmap data intervals:', heatmapDataByInterval.length);
+            console.log('All stations array length:', allStations.length);
+            
+            // Check if required elements exist
+            var timeElement = document.getElementById('currentTime');
+            var sliderElement = document.getElementById('timeSlider');
+            var buttonElement = document.getElementById('playButton');
+            
+            console.log('DOM elements found:', {{
+                currentTime: !!timeElement,
+                timeSlider: !!sliderElement,
+                playButton: !!buttonElement
+            }});
+            
+            // If elements are not found, retry after a short delay
+            if (!timeElement || !sliderElement || !buttonElement) {{
+                console.log('⏳ DOM elements not ready, retrying in 100ms...');
+                setTimeout(initializeHeatMap, 100);
+                return;
+            }}
+        
+        // Set up event listeners first
+        if (buttonElement) {{
+            buttonElement.addEventListener('click', playAnimation);
+            console.log('✅ Play button event listener attached');
+        }}
+        
+        if (sliderElement) {{
+            sliderElement.addEventListener('input', function(e) {{
+                updateHeatMap(parseInt(e.target.value));
+                // Pause animation when user manually changes time
+                if (isPlaying) {{
+                    clearInterval(playInterval);
+                    isPlaying = false;
+                    if (buttonElement) buttonElement.textContent = '▶ Play Animation';
+                }}
+            }});
+            console.log('✅ Slider event listener attached');
+        }}
+        
+            // Initialize with first interval if everything is ready
+            if (timeSteps.length > 0 && timeElement) {{
+                console.log('✅ Initializing with first interval');
+                updateHeatMap(0);
+            }} else {{
+                console.error('❌ Missing elements or no data:', {{
+                    timeSteps: timeSteps.length,
+                    timeElement: !!timeElement
+                }});
+                if (timeElement) timeElement.textContent = 'Error: No data available';
+            }}
+        }}
+        
+        // Start initialization - use multiple approaches to ensure it runs
+        if (document.readyState === 'loading') {{
+            document.addEventListener('DOMContentLoaded', initializeHeatMap);
+        }} else {{
+            // DOM is already loaded, start immediately
+            setTimeout(initializeHeatMap, 50);
+        }}
+    </script>
+</body>
+</html>'''
+    
+    # Save the HTML file
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write(html_content)
+    
+    print(f"🔥 Animated HTML heat map saved as: {output_file}")
+    print(f"🌐 Open {output_file} in your browser to view the animated heat map with timeline controls")
+    print(f"🎬 Use Play/Pause button and slider to control the temporal animation")
+    
+    return html_content
+
+
+def incident_view_heatmap_html(incident_code, incident_date, analysis_date, analysis_hhmm, period_minutes, interval_minutes=10, output_file=None):
+    """
+    Create a dynamic interactive HTML heatmap showing railway network delays as continuous color clouds.
+    Displays delay intensity as vibrant heatmap visualization with invisible clickable areas over 
+    affected stations for detailed information popups.
+    
+    Parameters:
+    incident_code (int/float): The incident number to analyze
+    incident_date (str): Date when incident started in 'DD-MMM-YYYY' format
+    analysis_date (str): Specific date to analyze in 'DD-MMM-YYYY' format
+    analysis_hhmm (str): Start time for analysis in 'HHMM' format (e.g., '1900')
+    period_minutes (int): Total duration of analysis period in minutes
+    interval_minutes (int): Duration of each interval in minutes (default: 10)
+    output_file (str): Optional HTML file path to save
+    
+    Returns:
+    str: HTML content of the interactive heatmap
+    """
+    
+    # Load station coordinates data from comprehensive JSON file
+    try:
+        from data.reference import reference_files
+        import json
+        
+        file_path = reference_files["all dft categories"]
+        print(f"Loading station coordinates from: {file_path}")
+        
+        if not os.path.exists(file_path):
+            print(f"File does not exist: {file_path}")
+            return None
+            
+        with open(file_path, 'r') as f:
+            stations_coords_data = json.load(f)
+            
+        print(f"Successfully loaded {len(stations_coords_data)} station records")
+        
+    except Exception as e:
+        print(f"Error loading station coordinates: {e}")
+        return None
+    
+    # Parse analysis parameters
+    try:
+        analysis_datetime = datetime.strptime(f"{analysis_date} {analysis_hhmm[:2]}:{analysis_hhmm[2:]}", '%d-%b-%Y %H:%M')
+    except ValueError:
+        print(f"Error: Invalid analysis date/time format.")
+        return None
+    
+    analysis_end = analysis_datetime + timedelta(minutes=period_minutes)
+    
+    print(f"Creating heatmap for incident {incident_code}")
+    print(f"Analysis period: {analysis_datetime.strftime('%d-%b-%Y %H:%M')} to {analysis_end.strftime('%d-%b-%Y %H:%M')}")
+    print(f"Interval size: {interval_minutes} minutes")
+    
+    # Calculate number of intervals
+    num_intervals = period_minutes // interval_minutes
+    if period_minutes % interval_minutes != 0:
+        num_intervals += 1
+    
+    print(f"Total intervals: {num_intervals}")
+    
+    # Determine day of week for analysis date
+    day_mapping = {0: 'MO', 1: 'TU', 2: 'WE', 3: 'TH', 4: 'FR', 5: 'SA', 6: 'SU'}
+    analysis_day_suffix = day_mapping[analysis_datetime.weekday()]
+    
+    # Load station files for the analysis day using NEW parquet structure
+    processed_base = 'processed_data'
+    
+    if not os.path.exists(processed_base):
+        print("No processed_data directory found. Please run the preprocessor first.")
+        return None
+    
+    # Get all station directories
+    station_dirs = [d for d in os.listdir(processed_base) 
+                   if os.path.isdir(os.path.join(processed_base, d))]
+    
+    # Build list of files to load (only for the specific day)
+    target_files = []
+    for station_dir in station_dirs:
+        station_path = os.path.join(processed_base, station_dir)
+        day_file = os.path.join(station_path, f"{analysis_day_suffix}.parquet")
+        if os.path.exists(day_file):
+            target_files.append((day_file, station_dir))
+    
+    print(f"Loading {len(target_files)} station files for {analysis_day_suffix}")
+    
+    # Create station coordinates mapping from JSON data (DFT categories A, B, C1, C2 only)
+    all_station_coords_map = {}
+    valid_categories = {'A', 'B', 'C1', 'C2'}
+    
+    for station in stations_coords_data:
+        if isinstance(station, dict):
+            station_id = str(station.get('stanox', ''))
+            dft_category = station.get('dft_category', '')
+            latitude = station.get('latitude')
+            longitude = station.get('longitude')
+            description = station.get('description', 'Unknown Station')
+            
+            # Only include stations with valid DFT categories (A, B, C1, C2) and coordinates
+            if (dft_category in valid_categories and 
+                station_id and 
+                latitude is not None and longitude is not None and
+                str(latitude).replace('.', '').replace('-', '').isdigit() and 
+                str(longitude).replace('.', '').replace('-', '').isdigit()):
+                try:
+                    all_station_coords_map[station_id] = {
+                        'name': description,
+                        'lat': float(latitude),
+                        'lon': float(longitude),
+                        'category': dft_category
+                    }
+                except ValueError:
+                    continue
+    
+    print(f"Found coordinates for {len(all_station_coords_map)} stations (DFT categories A/B/C1/C2)")
+    
+    # Collect delay timeline data for affected stations (same logic as incident_view_html)
+    station_timeline_data = {}
+    incident_section_code = None
+    incident_reason = None
+    incident_start_time = None
+    
+    for file_path, station_code in target_files:
+        if station_code not in all_station_coords_map:
+            continue
+            
+        try:
+            df = pd.read_parquet(file_path, engine='fastparquet')
+            if not isinstance(df, pd.DataFrame):
+                continue
+                
+            # Get all incident data for this station
+            all_incident_data = df[df['INCIDENT_NUMBER'] == incident_code].copy()
+            if all_incident_data.empty:
+                continue
+            
+            # Extract incident information on first occurrence
+            if incident_section_code is None and not all_incident_data.empty:
+                incident_records = all_incident_data[all_incident_data['INCIDENT_START_DATETIME'].str.contains(incident_date, na=False)]
+                if not incident_records.empty:
+                    incident_section_code = incident_records['SECTION_CODE'].iloc[0]
+                    incident_reason = incident_records['INCIDENT_REASON'].iloc[0]
+                    incident_start_time = incident_records['INCIDENT_START_DATETIME'].iloc[0]
+            
+            # Filter to events within our analysis period
+            all_incident_data['EVENT_DATETIME_parsed'] = pd.to_datetime(all_incident_data['EVENT_DATETIME'], format='%d-%b-%Y %H:%M', errors='coerce')
+            all_incident_data = all_incident_data[all_incident_data['EVENT_DATETIME_parsed'].notna()].copy()
+            
+            # Filter to analysis period
+            period_data = all_incident_data[
+                (all_incident_data['EVENT_DATETIME_parsed'] >= analysis_datetime) &
+                (all_incident_data['EVENT_DATETIME_parsed'] <= analysis_end) &
+                (all_incident_data['PFPI_MINUTES'].notna())
+            ].copy()
+            
+            if period_data.empty:
+                continue
+            
+            # Create timeline of INTERVAL-SPECIFIC delays for this station
+            interval_delays = {}
+            
+            for _, row in period_data.iterrows():
+                event_time = row['EVENT_DATETIME_parsed']
+                delay = row['PFPI_MINUTES']
+                
+                # Calculate which interval this event belongs to
+                minutes_from_start = int((event_time - analysis_datetime).total_seconds() / 60)
+                interval_number = minutes_from_start // interval_minutes
+                
+                # Calculate the start time of this interval
+                interval_start = analysis_datetime + timedelta(minutes=interval_number * interval_minutes)
+                
+                if interval_start not in interval_delays:
+                    interval_delays[interval_start] = 0
+                interval_delays[interval_start] += delay
+            
+            # Convert to timeline format
+            timeline = []
+            for interval_start in sorted(interval_delays.keys()):
+                interval_total_delay = interval_delays[interval_start]
+                timeline.append((interval_start, interval_total_delay))
+            
+            if timeline:
+                station_timeline_data[station_code] = timeline
+                
+        except Exception as e:
+            continue
+    
+    print(f"Found delay data for {len(station_timeline_data)} affected stations")
+    print(f"Incident section code: {incident_section_code}")
+    print(f"Incident reason: {incident_reason}")
+    print(f"Incident start time: {incident_start_time}")
+    
+    # Get incident location coordinates - handle multiple STANOX codes separated by colon
+    incident_lat = 54.5  # Default to center of UK
+    incident_lon = -2.0
+    incident_station_name = None
+    incident_locations = []  # Store multiple locations if section contains multiple STANOX codes
+    
+    if incident_section_code:
+        try:
+            from data.reference import reference_files
+            with open(reference_files["station codes"], 'r') as f:
+                station_codes_data = json.load(f)
+            
+            # Split section code by colon to handle cases like "04303:04730"
+            stanox_codes = [code.strip() for code in str(incident_section_code).split(':')]
+            print(f"Looking for STANOX codes: {stanox_codes}")
+            
+            for stanox_code in stanox_codes:
+                print(f"Searching for STANOX: {stanox_code}")
+                found_match = False
+                for record in station_codes_data:
+                    if isinstance(record, dict):
+                        record_stanox = record.get('stanox')
+                        # Try different formats: with/without leading zeros, as int vs string
+                        if (str(record_stanox) == str(stanox_code) or 
+                            str(record_stanox).zfill(5) == str(stanox_code).zfill(5) or
+                            str(record_stanox).lstrip('0') == str(stanox_code).lstrip('0')):
+                            found_match = True
+                            if record.get('latitude') and record.get('longitude'):
+                                location_info = {
+                                    'lat': float(record['latitude']),
+                                    'lon': float(record['longitude']),
+                                    'name': record.get('description', 'Incident Location'),
+                                    'stanox': stanox_code
+                                }
+                                incident_locations.append(location_info)
+                                station_name = record.get('description', 'Unknown')
+                                print(f"📍 Found incident location: {station_name} ({stanox_code})")
+                            break  # Found this STANOX code, move to next one
+                if not found_match:
+                    print(f"❌ STANOX {stanox_code} not found in reference data")
+            
+            # For backward compatibility, set primary location to first found location
+            if incident_locations:
+                incident_lat = incident_locations[0]['lat']
+                incident_lon = incident_locations[0]['lon']
+                incident_station_name = incident_locations[0]['name']
+                
+        except Exception as e:
+            print(f"Warning: Could not load incident location coordinates: {e}")
+    
+    # Create time steps for animation
+    time_steps = []
+    current_time = analysis_datetime
+    while current_time < analysis_end:
+        time_steps.append(current_time)
+        current_time += timedelta(minutes=interval_minutes)
+    
+    # Build timeline data structure for JavaScript (include ALL stations, delays for affected ones)
+    timeline_data = {}
+    for step_time in time_steps:
+        time_key = step_time.strftime('%H:%M')
+        timeline_data[time_key] = {}
+        
+        # For each station in the entire network
+        for station_code in all_station_coords_map.keys():
+            if station_code in station_timeline_data:
+                # Station has delays - calculate interval-specific delay
+                station_timeline = station_timeline_data[station_code]
+                interval_delay = 0
+                
+                for event_time, delay_amount in station_timeline:
+                    time_window_start = step_time
+                    time_window_end = step_time + timedelta(minutes=interval_minutes)
+                    
+                    if time_window_start <= event_time < time_window_end:
+                        interval_delay += delay_amount
+                
+                timeline_data[time_key][station_code] = interval_delay
+            else:
+                # Station has no delays - set to 0
+                timeline_data[time_key][station_code] = 0
+    
+    # Prepare data for JavaScript
+    station_coords_json = json.dumps(all_station_coords_map)
+    timeline_data_json = json.dumps(timeline_data)
+    time_steps_json = json.dumps([t.strftime('%H:%M') for t in time_steps])
+    
+    # Create incident markers JavaScript
+    incident_markers_js = ""
+    if incident_locations:
+        for i, loc in enumerate(incident_locations):
+            incident_markers_js += f'''
+            var incidentMarker{i} = L.marker([{loc['lat']}, {loc['lon']}], {{
+                icon: L.divIcon({{
+                    html: '<div style="font-size: 24px; color: red; font-weight: bold;">✕</div>',
+                    className: 'incident-marker',
+                    iconSize: [30, 30],
+                    iconAnchor: [15, 15]
+                }})
+            }}).addTo(map);
+            
+            incidentMarker{i}.bindPopup(`
+                <strong>Incident Location</strong><br>
+                Station: {loc['name']}<br>  
+                STANOX: {loc['stanox']}<br>
+                Incident: {incident_code}<br>
+                Section: {incident_section_code or 'N/A'}<br>
+                Reason: {incident_reason or 'N/A'}<br>
+                Started: {incident_start_time or 'N/A'}
+            `);'''
+    
+    # Create HTML content with continuous heatmap visualization
+    html_content = f'''<!DOCTYPE html>
+<html>
+<head>
+    <title>Incident {incident_code} - Network Heatmap Analysis</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+    <style>
+        body {{ margin: 0; font-family: Arial, sans-serif; background: #f5f5f5; }}
+        .gradient-legend {{
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+        }}
+        .gradient-bar {{
+            width: 200px;
+            height: 20px;
+            background: linear-gradient(to right, 
+                rgba(0,255,0,1.0) 0%,        /* Bright green - minor delays (1-14 min) */
+                rgba(255,255,0,1.0) 33%,     /* Bright yellow - medium delays (15-29 min) */
+                rgba(255,165,0,1.0) 66%,     /* Bright orange - high delays (30-59 min) */
+                rgba(255,0,0,1.0) 100%       /* Bright red - critical delays (60+ min) */
+            );
+            border: 1px solid #ccc;
+            border-radius: 10px;
+            margin: 0 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }}
+        .gradient-labels {{
+            display: flex;
+            justify-content: space-between;
+            width: 200px;
+            margin: 5px 10px 0 10px;
+            font-size: 10px;
+            color: #666;
+        }}
+        #map {{ height: 75vh; }}
+        #controls {{ 
+            height: 25vh; 
+            padding: 20px; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }}
+        .control-panel {{ 
+            background: rgba(255,255,255,0.95); 
+            padding: 15px; 
+            margin: 10px 0; 
+            border-radius: 10px; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            color: #333;
+        }}
+        #timeline {{ width: 100%; margin: 10px 0; height: 8px; }}
+        .time-display {{ 
+            font-size: 24px; 
+            font-weight: bold; 
+            text-align: center; 
+            color: #2c3e50;
+            margin: 10px 0;
+        }}
+        .play-controls {{ text-align: center; margin: 15px 0; }}
+        .btn {{ 
+            background: #3498db; 
+            color: white; 
+            border: none; 
+            padding: 10px 20px; 
+            margin: 0 5px; 
+            border-radius: 25px; 
+            cursor: pointer; 
+            font-size: 16px;
+            transition: all 0.3s ease;
+        }}
+        .btn:hover {{ background: #2980b9; transform: translateY(-2px); }}
+        .btn:active {{ transform: translateY(0); }}
+        #station-info {{ 
+            max-height: 120px; 
+            overflow-y: auto; 
+            margin-top: 10px;
+            font-size: 14px;
+        }}
+        .station-delay {{ 
+            display: inline-block; 
+            margin: 2px 5px; 
+            padding: 3px 8px; 
+            border-radius: 15px; 
+            font-size: 12px;
+        }}
+        .delay-low {{ background: rgba(0,255,0,1.0); color: black; }}
+        .delay-med {{ background: rgba(255,255,0,1.0); color: black; }}
+        .delay-high {{ background: rgba(255,165,0,1.0); color: white; }}
+        .delay-extreme {{ background: rgba(255,0,0,1.0); color: white; }}
+        .legend {{ 
+            background: rgba(255,255,255,0.95); 
+            padding: 10px; 
+            border-radius: 8px;
+            margin: 10px 0;
+            font-size: 12px;
+            color: #333;
+        }}
+        .legend-item {{ 
+            display: inline-block;
+            margin: 3px 8px 3px 0; 
+        }}
+        .legend-color {{ 
+            display: inline-block; 
+            width: 15px; 
+            height: 15px; 
+            border-radius: 50%; 
+            margin-right: 5px; 
+            vertical-align: middle;
+        }}
+    </style>
+</head>
+<body>
+    <!-- Map Container -->
+    <div id="map">
+    </div>
+    
+    <!-- Controls Container -->
+    <div id="controls">
+        <div class="control-panel">
+            <h3 style="margin-top: 0;">Incident {incident_code} - Network Heatmap (A/B/C1/C2 Stations) - {analysis_date}</h3>
+            <p style="margin: 5px 0;">Analysis Period: {analysis_datetime.strftime('%H:%M')} - {analysis_end.strftime('%H:%M')} ({period_minutes} min total, {interval_minutes}-min intervals)</p>
+            <p style="margin: 5px 0; font-weight: bold;">Section: {incident_section_code or 'N/A'}{' (' + incident_station_name + ')' if incident_station_name else ''} | Reason: {incident_reason or 'N/A'} | Started: {incident_start_time or 'N/A'}</p>
+            
+            <div class="time-display" id="current-time">{time_steps[0].strftime('%H:%M')}</div>
+            
+            <input type="range" id="timeline" min="0" max="{len(time_steps)-1}" value="0" step="1">
+            
+            <div class="play-controls">
+                <button class="btn" onclick="playTimeline()">▶ Play</button>
+                <button class="btn" onclick="pauseTimeline()">⏸ Pause</button>
+                <button class="btn" onclick="resetTimeline()">⏮ Reset</button>
+            </div>
+            
+            <div class="legend">
+                <strong>Continuous Heatmap - Delay Intensity:</strong>
+                <div class="gradient-legend">
+                    <span style="font-size: 10px; font-weight: bold;">Minor</span>
+                    <div class="gradient-bar"></div>
+                    <span style="font-size: 10px; font-weight: bold;">Critical</span>
+                </div>
+                <div class="gradient-labels">
+                    <span>1min</span>
+                    <span>15min</span>
+                    <span>30min</span>
+                    <span>60+min</span>
+                </div>
+
+            </div>
+            
+            <div id="station-info">Loading network heatmap...</div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize map
+        var map = L.map('map').setView([54.5, -2.0], 6);
+        L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+            attribution: '© OpenStreetMap contributors'
+        }}).addTo(map);
+        
+        // Add incident location markers for all found locations
+        
+        // Initialize heatmap layer using Leaflet.heat with ultra-focused, vibrant colors
+        var heatmapLayer = L.heatLayer([], {{
+            radius: 12,           // Even smaller radius for tight focus around stations
+            blur: 4,              // Minimal blur for very sharp, defined heat areas
+            maxZoom: 17,
+            max: 1.0,             // Maximum intensity value to prevent oversaturation
+            minOpacity: 0.5,      // Higher minimum opacity for maximum vibrancy
+            gradient: {{
+                0.0: 'rgba(0,0,0,0)',           // Transparent for no delays
+                0.3: 'rgba(0,255,0,1.0)',       // Bright green for minor delays (1-14 min)
+                0.5: 'rgba(255,255,0,1.0)',     // Bright yellow for medium delays (15-29 min)
+                0.7: 'rgba(255,165,0,1.0)',     // Bright orange for high delays (30-59 min)
+                1.0: 'rgba(255,0,0,1.0)'        // Bright red for critical delays (60+ min)
+            }}
+        }}).addTo(map);
+        
+        // Data
+        var stationCoords = {station_coords_json};
+        var timelineData = {timeline_data_json};
+        var timeSteps = {time_steps_json};
+        
+        // State
+        var currentIndex = 0;
+        var isPlaying = false;
+        var playInterval;
+        var markers = {{}};
+        
+        // Color functions for heatmap
+        function getHeatmapColor(delayMinutes) {{
+            if (delayMinutes === 0) return '#cccccc';      // Grey for no delays
+            if (delayMinutes >= 90) return '#8e44ad';      // Purple for extreme delays
+            if (delayMinutes >= 46) return '#e74c3c';      // Red for high delays  
+            if (delayMinutes >= 16) return '#f39c12';      // Orange for medium delays
+            return '#2ecc71';                              // Green for low delays
+        }}
+        
+        // Update heatmap for specific time index
+        function updateMap(index) {{
+            try {{
+                currentIndex = index;
+                var timeKey = timeSteps[index];
+                var delays = timelineData[timeKey] || {{}};
+                
+                console.log('🕐 Updating heatmap for time:', timeKey, 'with', Object.keys(delays).length, 'stations');
+                
+                // Clear existing station markers
+                Object.values(markers).forEach(m => map.removeLayer(m));
+                markers = {{}};
+                
+                // Update time display
+                document.getElementById('current-time').textContent = timeKey;
+                
+                // Prepare heatmap data and station statistics
+                var heatmapData = [];
+                var stationInfoHtml = '';
+                var totalDelayedStations = 0;
+                var totalSystemDelay = 0;
+                var delayedStations = [];
+                var maxDelay = 0;
+                
+                // First pass: collect all delays and find maximum for normalization
+                Object.entries(stationCoords).forEach(([stationCode, coords]) => {{
+                    var delayMinutes = delays[stationCode] || 0;
+                    if (delayMinutes > maxDelay) {{
+                        maxDelay = delayMinutes;
+                    }}
+                }});
+                
+                // Second pass: create heatmap data and station markers
+                Object.entries(stationCoords).forEach(([stationCode, coords]) => {{
+                    var delayMinutes = delays[stationCode] || 0;
+                    
+                    // Add to heatmap data (only if there are delays)
+                    if (delayMinutes > 0) {{
+                        // Use fixed intensity based on delay categories to prevent summation
+                        var intensity;
+                        if (delayMinutes >= 60) {{
+                            intensity = 1.0;      // Critical delays (60+ min) - maximum intensity
+                        }} else if (delayMinutes >= 30) {{
+                            intensity = 0.7;      // High delays (30-59 min)
+                        }} else if (delayMinutes >= 15) {{
+                            intensity = 0.5;      // Medium delays (15-29 min)
+                        }} else {{
+                            intensity = 0.3;      // Minor delays (1-14 min)
+                        }}
+                        // Leaflet.heat expects [lat, lng, intensity] format
+                        heatmapData.push([coords.lat, coords.lon, intensity]);
+                    }}
+                    
+                    // Create invisible clickable markers only for affected stations (with delays)
+                    if (delayMinutes > 0) {{
+                        var marker = L.circleMarker([coords.lat, coords.lon], {{
+                            radius: 8,               // Larger invisible area for easier clicking
+                            fillColor: 'transparent', // Invisible fill
+                            color: 'transparent',     // Invisible border
+                            weight: 0,               // No border
+                            opacity: 0,              // Completely invisible
+                            fillOpacity: 0           // Completely invisible
+                        }});
+                        
+                        // Add popup with station information
+                        var popupContent = `
+                            <strong>${{coords.name}}</strong><br>
+                            Station: ${{stationCode}}<br>
+                            Interval Delay: ${{delayMinutes}} minutes<br>
+                            Time Window: ${{timeKey}} - ${{timeKey}} ({interval_minutes} min)
+                        `;
+                        
+                        marker.bindPopup(popupContent);
+                        marker.addTo(map);
+                        markers[stationCode] = marker;
+                    }}
+                    
+                    // Collect statistics for affected stations
+                    if (delayMinutes > 0) {{
+                        totalDelayedStations++;
+                        totalSystemDelay += delayMinutes;
+                        
+                        var delayClass = delayMinutes >= 60 ? 'delay-extreme' : 
+                                       delayMinutes >= 30 ? 'delay-high' : 
+                                       delayMinutes >= 15 ? 'delay-med' : 'delay-low';
+                        
+                        delayedStations.push({{
+                            name: coords.name.substring(0,15),
+                            delay: delayMinutes,
+                            class: delayClass
+                        }});
+                    }}
+                }});
+                
+                // Update heatmap layer with new data
+                heatmapLayer.setLatLngs(heatmapData);
+                
+                // Sort delayed stations by delay amount (highest first)
+                delayedStations.sort((a, b) => b.delay - a.delay);
+                
+                // Update station info panel
+                if (totalDelayedStations > 0) {{
+                    var avgDelay = (totalSystemDelay / totalDelayedStations).toFixed(1);
+                    stationInfoHtml = `<strong>Network Impact:</strong> ${{totalDelayedStations}} stations affected, ${{totalSystemDelay}} total minutes in this {interval_minutes}-min interval (avg: ${{avgDelay}}min)<br><br>`;
+                    
+                    // Show top affected stations
+                    var topStations = delayedStations.slice(0, 10); // Show top 10
+                    topStations.forEach(station => {{
+                        stationInfoHtml += `<span class="station-delay ${{station.class}}">${{station.name}}: ${{station.delay}}min</span>`;
+                    }});
+                    
+                    if (delayedStations.length > 10) {{
+                        stationInfoHtml += `<span style="margin-left: 10px; font-style: italic;">...and ${{delayedStations.length - 10}} more</span>`;
+                    }}
+                }} else {{
+                    stationInfoHtml = `<strong>Network Status:</strong> No delays detected in this interval. ${{Object.keys(stationCoords).length}} stations (A/B/C1/C2 categories) monitored.`;
+                }}
+                
+                document.getElementById('station-info').innerHTML = stationInfoHtml;
+                
+            }} catch (error) {{
+                console.error('❌ Error updating heatmap:', error);
+                document.getElementById('station-info').innerHTML = 'Error updating heatmap: ' + error.message;
+            }}
+        }}
+        
+        // Timeline controls (same as incident_view_html)
+        document.getElementById('timeline').addEventListener('input', function(e) {{
+            pauseTimeline();
+            updateMap(parseInt(e.target.value));
+        }});
+        
+        function playTimeline() {{
+            if (!isPlaying) {{
+                isPlaying = true;
+                playInterval = setInterval(() => {{
+                    if (currentIndex < timeSteps.length - 1) {{
+                        currentIndex++;
+                        document.getElementById('timeline').value = currentIndex;
+                        updateMap(currentIndex);
+                    }} else {{
+                        pauseTimeline();
+                    }}
+                }}, 1500);  // Slightly slower for heatmap viewing
+            }}
+        }}
+        
+        function pauseTimeline() {{
+            isPlaying = false;
+            if (playInterval) clearInterval(playInterval);
+        }}
+        
+        function resetTimeline() {{
+            pauseTimeline();
+            currentIndex = 0;
+            document.getElementById('timeline').value = 0;
+            updateMap(0);
+        }}
+        
+        // Initialize heatmap with better error handling
+        function initializeHeatmap() {{
+            console.log('🌡️ Starting heatmap initialization...');
+            console.log('Leaflet available:', typeof L !== 'undefined');
+            console.log('Leaflet.heat available:', typeof L.heatLayer !== 'undefined');
+            console.log('Station coordinates loaded:', Object.keys(stationCoords).length);
+            console.log('Time steps:', timeSteps.length);
+            console.log('Timeline data:', Object.keys(timelineData).length);
+            
+            if (typeof L === 'undefined') {{
+                console.error('❌ Leaflet not loaded!');
+                document.getElementById('station-info').innerHTML = 'Error: Leaflet library not loaded';
+                return;
+            }}
+            
+            if (typeof L.heatLayer === 'undefined') {{
+                console.error('❌ Leaflet.heat plugin not loaded!');
+                document.getElementById('station-info').innerHTML = 'Error: Leaflet.heat plugin not loaded';
+                return;
+            }}
+            
+            if (timeSteps.length === 0) {{
+                console.error('❌ No time steps available!');
+                document.getElementById('station-info').innerHTML = 'No time data available';
+            }} else if (Object.keys(stationCoords).length === 0) {{
+                console.error('❌ No station coordinates available!');
+                document.getElementById('station-info').innerHTML = 'No station coordinates available';
+            }} else {{
+                console.log('✅ All data loaded successfully, initializing heatmap...');
+                updateMap(0);
+            }}
+            
+            // Add incident location markers
+            {incident_markers_js}
+            
+            console.log('🎬 Heatmap initialization complete!');
+        }}
+        
+        // Wait for all scripts to load before initializing
+        if (document.readyState === 'loading') {{
+            document.addEventListener('DOMContentLoaded', initializeHeatmap);
+        }} else {{
+            // DOM is already loaded, but wait a bit for scripts
+            setTimeout(initializeHeatmap, 100);
+        }}
+    </script>
+</body>
+</html>'''
+    
+    # Save HTML file
+    if output_file is None:
+        safe_date = analysis_date.replace('-', '_')
+        safe_time = analysis_hhmm
+        output_file = f'heatmap_{incident_code}_{safe_date}_{safe_time}_period{period_minutes}min_interval{interval_minutes}min.html'
+    
+    try:
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+        
+        print(f"🌡️ CONTINUOUS HEATMAP CREATED! ")
+        print(f"File: {output_file}")
+        print(f"Time steps: {len(time_steps)} ({interval_minutes}-minute intervals)")
+        print(f"Total stations mapped: {len(all_station_coords_map)} (DFT categories A/B/C1/C2)")
+        print(f"Affected stations: {len(station_timeline_data)}")
+        print(f"🔥 Features: Continuous delay heatmap with fading colors + grey station dots overlay")
+        print("🌐 Open the HTML file in your browser to explore the continuous heatmap!")
         
     except Exception as e:
         print(f"Error saving file: {e}")
