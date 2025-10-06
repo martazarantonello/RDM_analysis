@@ -2276,6 +2276,16 @@ def incident_view_heatmap_html(incident_code, incident_date, analysis_date, anal
             margin-right: 5px; 
             vertical-align: middle;
         }}
+        
+        /* Cloud-like heatmap circle styles */
+        .delay-circle {{
+            filter: blur(3px) brightness(1.1);
+            transition: filter 0.3s ease;
+        }}
+        .delay-circle:hover {{
+            filter: blur(1px) brightness(1.3);
+            /* Removed transform: scale() to prevent circle movement */
+        }}
     </style>
 </head>
 <body>
@@ -2301,7 +2311,7 @@ def incident_view_heatmap_html(incident_code, incident_date, analysis_date, anal
             </div>
             
             <div class="legend">
-                <strong>Continuous Heatmap - Delay Intensity:</strong>
+                <strong>Custom Delay Visualization - Exact Color Matching:</strong>
                 <div class="gradient-legend">
                     <span style="font-size: 10px; font-weight: bold;">Minor</span>
                     <div class="gradient-bar"></div>
@@ -2329,21 +2339,21 @@ def incident_view_heatmap_html(incident_code, incident_date, analysis_date, anal
         
         // Add incident location markers for all found locations
         
-        // Initialize heatmap layer using Leaflet.heat with ultra-focused, vibrant colors
-        var heatmapLayer = L.heatLayer([], {{
-            radius: 12,           // Even smaller radius for tight focus around stations
-            blur: 4,              // Minimal blur for very sharp, defined heat areas
-            maxZoom: 17,
-            max: 1.0,             // Maximum intensity value to prevent oversaturation
-            minOpacity: 0.5,      // Higher minimum opacity for maximum vibrancy
-            gradient: {{
-                0.0: 'rgba(0,0,0,0)',           // Transparent for no delays
-                0.3: 'rgba(0,255,0,1.0)',       // Bright green for minor delays (1-14 min)
-                0.5: 'rgba(255,255,0,1.0)',     // Bright yellow for medium delays (15-29 min)
-                0.7: 'rgba(255,165,0,1.0)',     // Bright orange for high delays (30-59 min)
-                1.0: 'rgba(255,0,0,1.0)'        // Bright red for critical delays (60+ min)
-            }}
-        }}).addTo(map);
+        // Custom colored circles for precise color control (bypassing Leaflet.heat limitations)
+        var delayCircles = L.layerGroup().addTo(map);
+        
+        // Color function that matches our legend exactly
+        function getExactDelayColor(delayMinutes) {{
+            if (delayMinutes >= 60) return '#ff0000';      // Bright red for critical delays (60+ min)
+            if (delayMinutes >= 30) return '#ffa500';      // Bright orange for high delays (30-59 min)
+            if (delayMinutes >= 15) return '#ffff00';      // Bright yellow for medium delays (15-29 min)
+            return '#00ff00';                              // Bright green for minor delays (1-14 min)
+        }}
+        
+        // Consistent circle size - same for all delays for uniform heatmap appearance
+        function getCircleSize(delayMinutes) {{
+            return 15;  // Fixed size for all delays to create uniform cloud-like heatmap
+        }}
         
         // Data
         var stationCoords = {station_coords_json};
@@ -2359,10 +2369,10 @@ def incident_view_heatmap_html(incident_code, incident_date, analysis_date, anal
         // Color functions for heatmap
         function getHeatmapColor(delayMinutes) {{
             if (delayMinutes === 0) return '#cccccc';      // Grey for no delays
-            if (delayMinutes >= 90) return '#8e44ad';      // Purple for extreme delays
-            if (delayMinutes >= 46) return '#e74c3c';      // Red for high delays  
-            if (delayMinutes >= 16) return '#f39c12';      // Orange for medium delays
-            return '#2ecc71';                              // Green for low delays
+            if (delayMinutes >= 60) return '#ff0000';      // Bright red for critical delays (60+ min) - matches legend
+            if (delayMinutes >= 30) return '#ffa500';      // Bright orange for high delays (30-59 min) - matches legend
+            if (delayMinutes >= 15) return '#ffff00';      // Bright yellow for medium delays (15-29 min) - matches legend
+            return '#00ff00';                              // Bright green for minor delays (1-14 min) - matches legend
         }}
         
         // Update heatmap for specific time index
@@ -2381,41 +2391,48 @@ def incident_view_heatmap_html(incident_code, incident_date, analysis_date, anal
                 // Update time display
                 document.getElementById('current-time').textContent = timeKey;
                 
-                // Prepare heatmap data and station statistics
-                var heatmapData = [];
+                // Clear existing delay circles and create new ones with exact colors
+                delayCircles.clearLayers();
+                
                 var stationInfoHtml = '';
                 var totalDelayedStations = 0;
                 var totalSystemDelay = 0;
                 var delayedStations = [];
-                var maxDelay = 0;
                 
-                // First pass: collect all delays and find maximum for normalization
-                Object.entries(stationCoords).forEach(([stationCode, coords]) => {{
-                    var delayMinutes = delays[stationCode] || 0;
-                    if (delayMinutes > maxDelay) {{
-                        maxDelay = delayMinutes;
-                    }}
-                }});
-                
-                // Second pass: create heatmap data and station markers
+                // Create colored delay circles for each affected station
                 Object.entries(stationCoords).forEach(([stationCode, coords]) => {{
                     var delayMinutes = delays[stationCode] || 0;
                     
-                    // Add to heatmap data (only if there are delays)
+                    // Create colored circles for stations with delays
                     if (delayMinutes > 0) {{
-                        // Use fixed intensity based on delay categories to prevent summation
-                        var intensity;
-                        if (delayMinutes >= 60) {{
-                            intensity = 1.0;      // Critical delays (60+ min) - maximum intensity
-                        }} else if (delayMinutes >= 30) {{
-                            intensity = 0.7;      // High delays (30-59 min)
-                        }} else if (delayMinutes >= 15) {{
-                            intensity = 0.5;      // Medium delays (15-29 min)
-                        }} else {{
-                            intensity = 0.3;      // Minor delays (1-14 min)
+                        var color = getExactDelayColor(delayMinutes);
+                        var size = getCircleSize(delayMinutes);
+                        
+                        // Debug logging for extreme delays
+                        if (delayMinutes >= 120) {{
+                            console.log(`🔥 EXTREME DELAY: Station ${{coords.name}} has ${{delayMinutes}} min delay → color ${{color}} size ${{size}} (should be bright red)`);
                         }}
-                        // Leaflet.heat expects [lat, lng, intensity] format
-                        heatmapData.push([coords.lat, coords.lon, intensity]);
+                        
+                        // Create cloud-like colored circle for the delay
+                        var delayCircle = L.circleMarker([coords.lat, coords.lon], {{
+                            radius: size,
+                            fillColor: color,
+                            color: color,
+                            weight: 0,               // No border for cleaner cloud effect
+                            opacity: 0.7,            // Slightly transparent for blending
+                            fillOpacity: 0.5,        // More transparent for cloud-like appearance
+                            className: 'delay-circle' // Apply CSS class for blur effects
+                        }});
+                        
+                        // Add popup with detailed information
+                        delayCircle.bindPopup(`
+                            <strong>${{coords.name}}</strong><br>
+                            Station: ${{stationCode}}<br>
+                            Interval Delay: ${{delayMinutes}} minutes<br>
+                            Time Window: ${{timeKey}} ({interval_minutes} min)
+                        `);
+                        
+                        delayCircles.addLayer(delayCircle);
                     }}
                     
                     // Create invisible clickable markers only for affected stations (with delays)
@@ -2458,9 +2475,6 @@ def incident_view_heatmap_html(incident_code, incident_date, analysis_date, anal
                         }});
                     }}
                 }});
-                
-                // Update heatmap layer with new data
-                heatmapLayer.setLatLngs(heatmapData);
                 
                 // Sort delayed stations by delay amount (highest first)
                 delayedStations.sort((a, b) => b.delay - a.delay);
