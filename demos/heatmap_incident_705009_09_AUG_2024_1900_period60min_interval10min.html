@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Incident 705009 - Network Heatmap Analysis</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+    <style>
+        body { margin: 0; font-family: Arial, sans-serif; background: #f5f5f5; }
+        .gradient-legend {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+        }
+        .gradient-bar {
+            width: 200px;
+            height: 20px;
+            background: linear-gradient(to right, 
+                rgba(0,255,0,1.0) 0%,        /* Bright green - minor delays (1-14 min) */
+                rgba(255,255,0,1.0) 33%,     /* Bright yellow - medium delays (15-29 min) */
+                rgba(255,165,0,1.0) 66%,     /* Bright orange - high delays (30-59 min) */
+                rgba(255,0,0,1.0) 100%       /* Bright red - critical delays (60+ min) */
+            );
+            border: 1px solid #ccc;
+            border-radius: 10px;
+            margin: 0 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .gradient-labels {
+            display: flex;
+            justify-content: space-between;
+            width: 200px;
+            margin: 5px 10px 0 10px;
+            font-size: 10px;
+            color: #666;
+        }
+        #map { height: 75vh; }
+        #controls { 
+            height: 25vh; 
+            padding: 20px; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .control-panel { 
+            background: rgba(255,255,255,0.95); 
+            padding: 15px; 
+            margin: 10px 0; 
+            border-radius: 10px; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            color: #333;
+        }
+        #timeline { width: 100%; margin: 10px 0; height: 8px; }
+        .time-display { 
+            font-size: 24px; 
+            font-weight: bold; 
+            text-align: center; 
+            color: #2c3e50;
+            margin: 10px 0;
+        }
+        .play-controls { text-align: center; margin: 15px 0; }
+        .btn { 
+            background: #3498db; 
+            color: white; 
+            border: none; 
+            padding: 10px 20px; 
+            margin: 0 5px; 
+            border-radius: 25px; 
+            cursor: pointer; 
+            font-size: 16px;
+            transition: all 0.3s ease;
+        }
+        .btn:hover { background: #2980b9; transform: translateY(-2px); }
+        .btn:active { transform: translateY(0); }
+        #station-info { 
+            max-height: 120px; 
+            overflow-y: auto; 
+            margin-top: 10px;
+            font-size: 14px;
+        }
+        .station-delay { 
+            display: inline-block; 
+            margin: 2px 5px; 
+            padding: 3px 8px; 
+            border-radius: 15px; 
+            font-size: 12px;
+        }
+        .delay-low { background: rgba(0,255,0,1.0); color: black; }
+        .delay-med { background: rgba(255,255,0,1.0); color: black; }
+        .delay-high { background: rgba(255,165,0,1.0); color: white; }
+        .delay-extreme { background: rgba(255,0,0,1.0); color: white; }
+        .legend { 
+            background: rgba(255,255,255,0.95); 
+            padding: 10px; 
+            border-radius: 8px;
+            margin: 10px 0;
+            font-size: 12px;
+            color: #333;
+        }
+        .legend-item { 
+            display: inline-block;
+            margin: 3px 8px 3px 0; 
+        }
+        .legend-color { 
+            display: inline-block; 
+            width: 15px; 
+            height: 15px; 
+            border-radius: 50%; 
+            margin-right: 5px; 
+            vertical-align: middle;
+        }
+        
+        /* Cloud-like heatmap circle styles */
+        .delay-circle {
+            filter: blur(3px) brightness(1.1);
+            transition: filter 0.3s ease;
+        }
+        .delay-circle:hover {
+            filter: blur(1px) brightness(1.3);
+            /* Removed transform: scale() to prevent circle movement */
+        }
+    </style>
+</head>
+<body>
+    <!-- Map Container -->
+    <div id="map">
+    </div>
+    
+    <!-- Controls Container -->
+    <div id="controls">
+        <div class="control-panel">
+            <h3 style="margin-top: 0;">Incident 705009 - Network Heatmap (A/B/C1/C2 Stations) - 09-AUG-2024</h3>
+            <p style="margin: 5px 0;">Analysis Period: 19:00 - 20:00 (60 min total, 10-min intervals)</p>
+            <p style="margin: 5px 0; font-weight: bold;">Section: 53221 (Hitchin) | Reason: I1 | Started: 09-AUG-2024 18:41</p>
+            
+            <div class="time-display" id="current-time">19:00</div>
+            
+            <input type="range" id="timeline" min="0" max="5" value="0" step="1">
+            
+            <div class="play-controls">
+                <button class="btn" onclick="playTimeline()">▶ Play</button>
+                <button class="btn" onclick="pauseTimeline()">⏸ Pause</button>
+                <button class="btn" onclick="resetTimeline()">⏮ Reset</button>
+            </div>
+            
+            <div class="legend">
+                <strong>Custom Delay Visualization - Exact Color Matching:</strong>
+                <div class="gradient-legend">
+                    <span style="font-size: 10px; font-weight: bold;">Minor</span>
+                    <div class="gradient-bar"></div>
+                    <span style="font-size: 10px; font-weight: bold;">Critical</span>
+                </div>
+                <div class="gradient-labels">
+                    <span>1min</span>
+                    <span>15min</span>
+                    <span>30min</span>
+                    <span>60+min</span>
+                </div>
+
+            </div>
+            
+            <div id="station-info">Loading network heatmap...</div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize map
+        var map = L.map('map').setView([54.5, -2.0], 6);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+        
+        // Add incident location markers for all found locations
+        
+        // Custom colored circles for precise color control (bypassing Leaflet.heat limitations)
+        var delayCircles = L.layerGroup().addTo(map);
+        
+        // Color function that matches our legend exactly
+        function getExactDelayColor(delayMinutes) {
+            if (delayMinutes >= 60) return '#ff0000';      // Bright red for critical delays (60+ min)
+            if (delayMinutes >= 30) return '#ffa500';      // Bright orange for high delays (30-59 min)
+            if (delayMinutes >= 15) return '#ffff00';      // Bright yellow for medium delays (15-29 min)
+            return '#00ff00';                              // Bright green for minor delays (1-14 min)
+        }
+        
+        // Consistent circle size - same for all delays for uniform heatmap appearance
+        function getCircleSize(delayMinutes) {
+            return 15;  // Fixed size for all delays to create uniform cloud-like heatmap
+        }
+        
+        // Data
+        var stationCoords = {"51353": {"name": "Upminster Lt", "lat": 51.5584854, "lon": 0.250420457, "category": "C2"}, "66409": {"name": "Birmingham Snow Hill", "lat": 52.48358205, "lon": -1.89982443, "category": "C1"}, "69202": {"name": "Coventry", "lat": 52.40171945, "lon": -1.514919639, "category": "B"}, "70100": {"name": "Northampton", "lat": 52.23762052, "lon": -0.906049741, "category": "C1"}, "70030": {"name": "Rugby", "lat": 52.37875449, "lon": -1.249270928, "category": "C1"}, "65630": {"name": "Birmingham New Street", "lat": 52.47818683, "lon": -1.898364301, "category": "A"}, "69215": {"name": "Birmingham International", "lat": 52.4509405, "lon": -1.724796594, "category": "B"}, "65043": {"name": "Wolverhampton", "lat": 52.58784504, "lon": -2.120990792, "category": "B"}, "42140": {"name": "Crewe", "lat": 53.08872828, "lon": -2.432960142, "category": "B"}, "43314": {"name": "Stafford", "lat": 52.8035941, "lon": -2.123073369, "category": "C1"}, "43211": {"name": "Stoke-On-Trent", "lat": 53.00847515, "lon": -2.18177955, "category": "C1"}, "69001": {"name": "Tamworth", "lat": 52.63426337, "lon": -1.692323977, "category": "C2"}, "70306": {"name": "Bletchley", "lat": 51.99497466, "lon": -0.737189972, "category": "C2"}, "70319": {"name": "Cheddington", "lat": 51.85838133, "lon": -0.662602796, "category": "C2"}, "70321": {"name": "Leighton Buzzard", "lat": 51.91610432, "lon": -0.678336403, "category": "C2"}, "70261": {"name": "Milton Keynes Central", "lat": 52.02582922, "lon": -0.764014322, "category": "B"}, "70421": {"name": "Berkhamsted", "lat": 51.76368774, "lon": -0.562517032, "category": "C2"}, "71011": {"name": "Hemel Hempstead", "lat": 51.74210739, "lon": -0.490781307, "category": "C2"}, "70411": {"name": "Tring", "lat": 51.80036976, "lon": -0.622262169, "category": "C2"}, "72007": {"name": "Harrow & Wealdstone", "lat": 51.59162111, "lon": -0.334086181, "category": "C1"}, "72017": {"name": "Harrow & Wealdstone D.C.", "lat": 51.59162132, "lon": -0.33410061, "category": "C1"}, "71040": {"name": "Watford Junction", "lat": 51.66442681, "lon": -0.396485321, "category": "B"}, "72311": {"name": "Queen's Park (Greater London)", "lat": 51.5339648, "lon": -0.204984852, "category": "C2"}, "72021": {"name": "Wembley Central", "lat": 51.55241594, "lon": -0.296573671, "category": "C2"}, "72410": {"name": "Euston London", "lat": 51.52836974, "lon": -0.134562782, "category": "A"}, "63021": {"name": "Marylebone London", "lat": 51.52343241, "lon": -0.163595042, "category": "A"}, "62203": {"name": "Harlington", "lat": 51.96155868, "lon": -0.495066347, "category": "B"}, "62400": {"name": "Luton", "lat": 51.88227944, "lon": -0.414898307, "category": "B"}, "63630": {"name": "St Pancras London", "lat": 51.5308041, "lon": -0.128753901, "category": "A"}, "57009": {"name": "Cromford", "lat": 53.11293156, "lon": -1.548788537, "category": "C2"}, "57403": {"name": "Derby", "lat": 52.91661029, "lon": -1.463086319, "category": "B"}, "55247": {"name": "Nottingham", "lat": 52.94710403, "lon": -1.144223277, "category": "B"}, "55120": {"name": "Radford Junction", "lat": 52.95637484, "lon": -1.184232031, "category": "B"}, "61009": {"name": "Kettering", "lat": 52.39321471, "lon": -0.731733681, "category": "C2"}, "55118": {"name": "Basford", "lat": 52.98150104, "lon": -1.177801192, "category": "C2"}, "59301": {"name": "Narborough", "lat": 52.5717419, "lon": -1.203190495, "category": "C1"}, "59002": {"name": "Loughborough", "lat": 52.77936279, "lon": -1.196439974, "category": "C1"}, "59133": {"name": "Langham Junction", "lat": 52.71314575, "lon": -0.784769165, "category": "B"}, "57604": {"name": "Willington", "lat": 52.85763528, "lon": -1.548468963, "category": "C2"}, "61100": {"name": "Wellingborough", "lat": 52.30359086, "lon": -0.675629992, "category": "C2"}, "59241": {"name": "Leicester", "lat": 52.63232419, "lon": -1.125257641, "category": "B"}, "11271": {"name": "Dalton", "lat": 54.15424025, "lon": -3.179003326, "category": "C2"}, "9161": {"name": "Carlisle", "lat": 54.89065014, "lon": -2.933815618, "category": "B"}, "36027": {"name": "Aintree", "lat": 53.47399961, "lon": -2.956659411, "category": "C2"}, "None": {"name": "Tadworth (The Avenue)", "lat": 51.29073745, "lon": -0.235999108, "category": "C2"}, "35437": {"name": "Whiston", "lat": 53.4140455, "lon": -2.79733822, "category": "C2"}, "37005": {"name": "Hartford", "lat": 53.24194398, "lon": -2.55288293, "category": "C1"}, "37003": {"name": "Hartford Junction", "lat": 53.24728079, "lon": -2.564940836, "category": "B"}, "36080": {"name": "Liverpool Central (Northern)", "lat": 53.40550165, "lon": -2.97918924, "category": "B"}, "38183": {"name": "Liverpool Central (Wirral)", "lat": 53.40460292, "lon": -2.979168597, "category": "B"}, "36151": {"name": "Liverpool Lime Street", "lat": 53.40821014, "lon": -2.97774713, "category": "A"}, "36029": {"name": "Walton (Merseyside)", "lat": 53.45595255, "lon": -2.965289695, "category": "C2"}, "37001": {"name": "Acton Bridge", "lat": 53.26597274, "lon": -2.602669556, "category": "B"}, "36501": {"name": "Runcorn", "lat": 53.33980512, "lon": -2.740382121, "category": "C1"}, "37129": {"name": "Northwich", "lat": 53.26196906, "lon": -2.496173726, "category": "B"}, "35136": {"name": "Wigan North Western", "lat": 53.54267176, "lon": -2.632248253, "category": "B"}, "35531": {"name": "Warrington Bank Quay", "lat": 53.3864142, "lon": -2.604369928, "category": "B"}, "40320": {"name": "Chester", "lat": 53.19593031, "lon": -2.880102179, "category": "B"}, "40036": {"name": "Bangor (Gwynedd)", "lat": 53.22231441, "lon": -4.134384154, "category": "C1"}, "40050": {"name": "Llandudno Junction", "lat": 53.28173294, "lon": -3.802828897, "category": "C2"}, "29057": {"name": "Hapton", "lat": 53.78210592, "lon": -2.318660643, "category": "C2"}, "31620": {"name": "Bolton", "lat": 53.57414553, "lon": -2.425824972, "category": "C1"}, "11720": {"name": "Lancaster", "lat": 54.04855005, "lon": -2.807912694, "category": "B"}, "29150": {"name": "Blackburn", "lat": 53.74651844, "lon": -2.479122399, "category": "C1"}, "30021": {"name": "Blackpool North", "lat": 53.82106587, "lon": -3.051137536, "category": "C1"}, "30033": {"name": "Blackpool South", "lat": 53.7986131, "lon": -3.049057514, "category": "C1"}, "30120": {"name": "Preston", "lat": 53.75527949, "lon": -2.706721475, "category": "B"}, "32583": {"name": "Chelford", "lat": 53.27076184, "lon": -2.280355338, "category": "C1"}, "32534": {"name": "Stockport", "lat": 53.40490987, "lon": -2.163913436, "category": "B"}, "32568": {"name": "Wilmslow", "lat": 53.32750783, "lon": -2.22517467, "category": "C2"}, "31521": {"name": "Salford Crescent", "lat": 53.48649944, "lon": -2.275749016, "category": "C2"}, "35146": {"name": "Swinton (Greater Manchester)", "lat": 53.51425335, "lon": -2.323326523, "category": "C1"}, "37225": {"name": "Altrincham", "lat": 53.38743894, "lon": -2.347277745, "category": "C2"}, "32554": {"name": "Strines", "lat": 53.37445672, "lon": -2.033028682, "category": "C2"}, "32571": {"name": "Macclesfield", "lat": 53.25934278, "lon": -2.122881452, "category": "C1"}, "32255": {"name": "Hadfield", "lat": 53.46074619, "lon": -1.965320688, "category": "C2"}, "31033": {"name": "Rochdale", "lat": 53.6098585, "lon": -2.154127352, "category": "C2"}, "32530": {"name": "Manchester Airport", "lat": 53.35705573, "lon": -2.279419388, "category": "B"}, "33087": {"name": "Manchester Oxford Road", "lat": 53.47398766, "lon": -2.242522747, "category": "C1"}, "32000": {"name": "Manchester Piccadilly", "lat": 53.47671092, "lon": -2.228978079, "category": "A"}, "31510": {"name": "Manchester Victoria", "lat": 53.48747019, "lon": -2.242599729, "category": "B"}, "74451": {"name": "Hanborough", "lat": 51.82474427, "lon": -1.371688567, "category": "C2"}, "74465": {"name": "Kingham", "lat": 51.90225669, "lon": -1.627870635, "category": "C2"}, "74313": {"name": "Didcot Parkway", "lat": 51.61088458, "lon": -1.241782727, "category": "B"}, "73503": {"name": "High Wycombe", "lat": 51.63001338, "lon": -0.745903778, "category": "C1"}, "74803": {"name": "Newbury", "lat": 51.39738058, "lon": -1.322937068, "category": "C1"}, "73000": {"name": "Paddington London", "lat": 51.51736627, "lon": -0.178252327, "category": "A"}, "74446": {"name": "Oxford", "lat": 51.7540247, "lon": -1.269811809, "category": "B"}, "74005": {"name": "Maidenhead", "lat": 51.51647002, "lon": -0.723082322, "category": "C1"}, "74237": {"name": "Reading", "lat": 51.45867269, "lon": -0.97226885, "category": "B"}, "73822": {"name": "Slough", "lat": 51.51227294, "lon": -0.592060338, "category": "C1"}, "73253": {"name": "Ealing Broadway", "lat": 51.51471047, "lon": -0.300863034, "category": "C1"}, "81109": {"name": "Bristol Parkway", "lat": 51.51406846, "lon": -2.543232967, "category": "B"}, "81700": {"name": "Bristol Temple Meads", "lat": 51.45004553, "lon": -2.581327047, "category": "A"}, "75352": {"name": "Chippenham", "lat": 51.45682535, "lon": -2.115091984, "category": "C1"}, "81501": {"name": "Bath Spa", "lat": 51.37811326, "lon": -2.356274643, "category": "C1"}, "75012": {"name": "Swindon", "lat": 51.56548423, "lon": -1.786434627, "category": "C1"}, "81911": {"name": "Weston-Super-Mare", "lat": 51.34405083, "lon": -2.971944363, "category": "C2"}, "83421": {"name": "Exeter St Davids", "lat": 50.72908512, "lon": -3.544343196, "category": "C1"}, "83624": {"name": "Newton Abbot", "lat": 50.52959902, "lon": -3.598490559, "category": "C1"}, "83631": {"name": "Paignton", "lat": 50.43471142, "lon": -3.565720915, "category": "C2"}, "83628": {"name": "Torquay", "lat": 50.46108284, "lon": -3.544049048, "category": "C2"}, "83009": {"name": "Taunton", "lat": 51.02367148, "lon": -3.102109125, "category": "C1"}, "85734": {"name": "Penzance", "lat": 50.12169531, "lon": -5.532400043, "category": "C1"}, "85303": {"name": "St Austell", "lat": 50.33983383, "lon": -4.789532924, "category": "C2"}, "85501": {"name": "Truro", "lat": 50.26368117, "lon": -5.06293654, "category": "C1"}, "84139": {"name": "Plymouth", "lat": 50.3778324, "lon": -4.143321392, "category": "C1"}, "76357": {"name": "Hereford", "lat": 52.06164661, "lon": -2.708845426, "category": "C1"}, "76401": {"name": "Newport (South Wales)", "lat": 51.59020039, "lon": -2.998842691, "category": "B"}, "79791": {"name": "Bridgend", "lat": 51.50745102, "lon": -3.574846006, "category": "C2"}, "77301": {"name": "Cardiff Central", "lat": 51.47524415, "lon": -3.177755753, "category": "A"}, "78451": {"name": "Cardiff Queen Street", "lat": 51.48250792, "lon": -3.170742254, "category": "C1"}, "78215": {"name": "Pontypridd", "lat": 51.59935908, "lon": -3.342674343, "category": "C2"}, "79304": {"name": "Swansea", "lat": 51.62515056, "lon": -3.94154689, "category": "C1"}, "64224": {"name": "Shrewsbury", "lat": 52.71139705, "lon": -2.748938305, "category": "C1"}, "69424": {"name": "Banbury", "lat": 52.06096161, "lon": -1.327539652, "category": "C1"}, "66411": {"name": "Birmingham Moor Street", "lat": 52.47818163, "lon": -1.892474913, "category": "B"}, "66461": {"name": "Olton", "lat": 52.43851269, "lon": -1.804309574, "category": "C1"}, "69300": {"name": "Leamington Spa", "lat": 52.28402321, "lon": -1.533796276, "category": "C1"}, "65033": {"name": "Albrighton", "lat": 52.63794427, "lon": -2.268900241, "category": "B"}, "64813": {"name": "Wellington", "lat": 52.70095121, "lon": -2.516421618, "category": "C2"}, "64827": {"name": "Telford Central", "lat": 52.69312656, "lon": -2.451227549, "category": "C2"}, "68076": {"name": "Cheltenham Spa", "lat": 51.89650841, "lon": -2.10022861, "category": "C1"}, "68089": {"name": "Gloucester", "lat": 51.86574107, "lon": -2.238125789, "category": "C1"}, "67116": {"name": "Worcester Shrub Hill", "lat": 52.19575597, "lon": -2.207701157, "category": "C1"}, "67195": {"name": "Worcester Foregate Street", "lat": 52.19483027, "lon": -2.22232656, "category": "C2"}, "88315": {"name": "Beckenham Junction (C)", "lat": 51.41141588, "lon": -0.027162464, "category": "C2"}, "88415": {"name": "Lewisham", "lat": 51.46615155, "lon": -0.014724253, "category": "C2"}, "88477": {"name": "Bromley South", "lat": 51.39993929, "lon": 0.018348846, "category": "B"}, "87249": {"name": "Herne Hill", "lat": 51.4541251, "lon": -0.103046737, "category": "C2"}, "89347": {"name": "Otford Junction", "lat": 51.30408124, "lon": 0.19778001, "category": "B"}, "88493": {"name": "St Mary Cray", "lat": 51.39477686, "lon": 0.107247456, "category": "C2"}, "88486": {"name": "Swanley", "lat": 51.39277772, "lon": 0.167529164, "category": "C2"}, "88422": {"name": "Barnehurst", "lat": 51.46487128, "lon": 0.159426204, "category": "C2"}, "88421": {"name": "Bexleyheath", "lat": 51.46354839, "lon": 0.133449277, "category": "C2"}, "88416": {"name": "Blackheath", "lat": 51.46575945, "lon": 0.008294441, "category": "C2"}, "88466": {"name": "Dartford", "lat": 51.44757009, "lon": 0.219056081, "category": "C1"}, "88438": {"name": "Dartford Junction", "lat": 51.45048279, "lon": 0.207682965, "category": "B"}, "88418": {"name": "Eltham", "lat": 51.45510258, "lon": 0.05244815, "category": "C2"}, "88451": {"name": "Hither Green", "lat": 51.45152934, "lon": -0.000965839, "category": "C2"}, "87245": {"name": "Blackfriars London", "lat": 51.51173519, "lon": -0.101043652, "category": "A"}, "89403": {"name": "Maidstone East", "lat": 51.2778196, "lon": 0.51915802, "category": "C1"}, "88457": {"name": "Mottingham", "lat": 51.44077566, "lon": 0.048927829, "category": "B"}, "88459": {"name": "New Eltham", "lat": 51.43770091, "lon": 0.070373143, "category": "C2"}, "87244": {"name": "City Thameslink", "lat": 51.51583242, "lon": -0.102501911, "category": "C1"}, "88491": {"name": "Orpington", "lat": 51.37352005, "lon": 0.089028905, "category": "C2"}, "88492": {"name": "Petts Wood", "lat": 51.38817785, "lon": 0.073886061, "category": "C2"}, "89351": {"name": "Sevenoaks", "lat": 51.27649518, "lon": 0.182124647, "category": "B"}, "88461": {"name": "Sidcup", "lat": 51.43441643, "lon": 0.103316188, "category": "C2"}, "88419": {"name": "Welling", "lat": 51.46501866, "lon": 0.101843733, "category": "C2"}, "88601": {"name": "Abbey Wood", "lat": 51.49166387, "lon": 0.120356015, "category": "C2"}, "89402": {"name": "Barming", "lat": 51.28409644, "lon": 0.477911305, "category": "B"}, "88481": {"name": "Grove Park", "lat": 51.43044212, "lon": 0.022570152, "category": "C2"}, "88403": {"name": "Cannon Street London", "lat": 51.51057667, "lon": -0.090614829, "category": "A"}, "88401": {"name": "Charing Cross London", "lat": 51.50751666, "lon": -0.123886427, "category": "A"}, "88410": {"name": "New Cross", "lat": 51.47635163, "lon": -0.033002186, "category": "C2"}, "88517": {"name": "Woolwich Arsenal", "lat": 51.48986847, "lon": 0.069854793, "category": "C2"}, "89011": {"name": "Gillingham (Kent)", "lat": 51.38685222, "lon": 0.55101597, "category": "C1"}, "89144": {"name": "Sittingbourne", "lat": 51.34222226, "lon": 0.735216073, "category": "C2"}, "89007": {"name": "Chatham", "lat": 51.38031867, "lon": 0.520472092, "category": "C1"}, "89004": {"name": "Rochester", "lat": 51.3859243, "lon": 0.510718831, "category": "B"}, "88285": {"name": "Hastings", "lat": 50.85745974, "lon": 0.576007369, "category": "C1"}, "89315": {"name": "Maidstone West", "lat": 51.26979641, "lon": 0.515851666, "category": "C1"}, "89331": {"name": "Paddock Wood", "lat": 51.18250986, "lon": 0.389461792, "category": "C2"}, "89326": {"name": "Staplehurst", "lat": 51.17101316, "lon": 0.550527916, "category": "C2"}, "89363": {"name": "Tonbridge", "lat": 51.19119121, "lon": 0.269688557, "category": "B"}, "89375": {"name": "Tunbridge Wells", "lat": 51.13017663, "lon": 0.262407401, "category": "C1"}, "86451": {"name": "Barnham", "lat": 50.83031957, "lon": -0.641074375, "category": "C2"}, "86424": {"name": "Chichester", "lat": 50.83188651, "lon": -0.783031297, "category": "C2"}, "86342": {"name": "Warblington", "lat": 50.85344563, "lon": -0.967156443, "category": "C2"}, "87980": {"name": "Brighton", "lat": 50.82882352, "lon": -0.141287498, "category": "B"}, "88103": {"name": "Hove", "lat": 50.83558608, "lon": -0.170843308, "category": "C2"}, "87640": {"name": "Norwood Fork Junction", "lat": 51.38904731, "lon": -0.082742599, "category": "C2"}, "87941": {"name": "Horsham", "lat": 51.06533753, "lon": -0.318796273, "category": "C2"}, "87938": {"name": "Ockley", "lat": 51.15191058, "lon": -0.335670455, "category": "C2"}, "87939": {"name": "Warnham", "lat": 51.09336484, "lon": -0.329204679, "category": "C2"}, "88221": {"name": "Lewes", "lat": 50.87034132, "lon": 0.012440906, "category": "C2"}, "87603": {"name": "New Cross Gate London", "lat": 51.4755735, "lon": -0.040235834, "category": "C1"}, "87701": {"name": "East Croydon", "lat": 51.37573143, "lon": -0.093357217, "category": "B"}, "87687": {"name": "Dorking", "lat": 51.24077032, "lon": -0.32386972, "category": "C1"}, "87681": {"name": "Epsom", "lat": 51.33439146, "lon": -0.268777677, "category": "C1"}, "87627": {"name": "Forest Hill", "lat": 51.43892142, "lon": -0.053316173, "category": "C2"}, "87685": {"name": "Leatherhead", "lat": 51.29935593, "lon": -0.333212441, "category": "C2"}, "87643": {"name": "Norwood Junction", "lat": 51.39701746, "lon": -0.075221578, "category": "C2"}, "87751": {"name": "Oxted", "lat": 51.25735352, "lon": -0.005101165, "category": "C2"}, "87801": {"name": "Purley", "lat": 51.33649183, "lon": -0.113649299, "category": "C2"}, "87631": {"name": "Streatham Common", "lat": 51.41868575, "lon": -0.13615541, "category": "C2"}, "87671": {"name": "Sutton (Surrey)", "lat": 51.36018218, "lon": -0.190241182, "category": "C2"}, "87708": {"name": "Tadworth", "lat": 51.2916362, "lon": -0.235964666, "category": "C2"}, "87635": {"name": "Thornton Heath", "lat": 51.39923675, "lon": -0.101005655, "category": "C2"}, "87663": {"name": "Wallington", "lat": 51.36047564, "lon": -0.151446952, "category": "C2"}, "87222": {"name": "Balham", "lat": 51.44342672, "lon": -0.165367286, "category": "C2"}, "87651": {"name": "West Croydon", "lat": 51.37856735, "lon": -0.101861224, "category": "C2"}, "87679": {"name": "Ewell East", "lat": 51.34566902, "lon": -0.241070307, "category": "C2"}, "87911": {"name": "Gatwick Airport", "lat": 51.15648928, "lon": -0.161041531, "category": "B"}, "87633": {"name": "Norbury", "lat": 51.41126686, "lon": -0.122077191, "category": "C2"}, "87621": {"name": "Streatham Hill", "lat": 51.43834213, "lon": -0.128161132, "category": "C2"}, "88254": {"name": "Eastbourne", "lat": 50.76914878, "lon": 0.281817377, "category": "C1"}, "87722": {"name": "Redhill", "lat": 51.24020597, "lon": -0.166300845, "category": "C1"}, "87971": {"name": "Burgess Hill", "lat": 50.95181787, "lon": -0.127842611, "category": "C2"}, "87759": {"name": "East Grinstead", "lat": 51.12627189, "lon": -0.017900092, "category": "C1"}, "87973": {"name": "Hassocks", "lat": 50.92422877, "lon": -0.146025301, "category": "C2"}, "87967": {"name": "Haywards Heath", "lat": 51.00542092, "lon": -0.105729774, "category": "B"}, "87920": {"name": "Three Bridges", "lat": 51.1169223, "lon": -0.161184079, "category": "C1"}, "86074": {"name": "Andover", "lat": 51.21120376, "lon": -1.491735788, "category": "C1"}, "86066": {"name": "Basingstoke", "lat": 51.26810452, "lon": -1.088329538, "category": "B"}, "86042": {"name": "Farnborough (Main)", "lat": 51.2965226, "lon": -0.756445101, "category": "C2"}, "86045": {"name": "Fleet", "lat": 51.29099778, "lon": -0.831169342, "category": "C2"}, "86295": {"name": "Brading", "lat": 50.67768493, "lon": -1.139442681, "category": "B"}, "86341": {"name": "Havant", "lat": 50.85448196, "lon": -0.98276108, "category": "C2"}, "86313": {"name": "Portsmouth & Southsea", "lat": 50.79781709, "lon": -1.090413451, "category": "C1"}, "86311": {"name": "Portsmouth Harbour (Ship)", "lat": 50.79885857, "lon": -1.108840055, "category": "C1"}, "86310": {"name": "Portsmouth Harbour (Ballast)", "lat": 56.61273116, "lon": -0.753771588, "category": "C1"}, "87021": {"name": "Alton", "lat": 51.15110314, "lon": -0.967676104, "category": "C2"}, "87026": {"name": "Farnham", "lat": 51.21147951, "lon": -0.793096865, "category": "C2"}, "87149": {"name": "Barnes", "lat": 51.46706319, "lon": -0.240725387, "category": "C2"}, "87144": {"name": "Brentford", "lat": 51.48785197, "lon": -0.309063517, "category": "C2"}, "87069": {"name": "Clandon", "lat": 51.2638712, "lon": -0.502197101, "category": "C2"}, "87121": {"name": "Feltham", "lat": 51.44789734, "lon": -0.409838237, "category": "C2"}, "87158": {"name": "Hampton", "lat": 51.41590632, "lon": -0.372119918, "category": "C2"}, "87181": {"name": "Hampton Court", "lat": 51.40200139, "lon": -0.34242268, "category": "C2"}, "87169": {"name": "New Malden", "lat": 51.40434509, "lon": -0.256073064, "category": "C2"}, "87163": {"name": "Norbiton", "lat": 51.41193829, "lon": -0.283105989, "category": "C2"}, "87271": {"name": "Raynes Park", "lat": 51.40934969, "lon": -0.230000202, "category": "C2"}, "87135": {"name": "Richmond", "lat": 51.46254111, "lon": -0.299922151, "category": "B"}, "87171": {"name": "Surbiton", "lat": 51.39245848, "lon": -0.303958558, "category": "B"}, "87159": {"name": "Teddington", "lat": 51.42432813, "lon": -0.331546417, "category": "C2"}, "87131": {"name": "Twickenham", "lat": 51.45037209, "lon": -0.329158029, "category": "C1"}, "87119": {"name": "Twickenham Jn", "lat": 51.44863597, "lon": -0.333538806, "category": "C1"}, "87153": {"name": "Wandsworth Town", "lat": 51.4606591, "lon": -0.174753112, "category": "C2"}, "86005": {"name": "Weybridge", "lat": 51.3656019, "lon": -0.45985092, "category": "C2"}, "87261": {"name": "Wimbledon", "lat": 51.42158218, "lon": -0.206514818, "category": "B"}, "87302": {"name": "Worcester Park", "lat": 51.38170492, "lon": -0.245437365, "category": "C2"}, "87304": {"name": "Ewell West", "lat": 51.3503988, "lon": -0.256685924, "category": "C2"}, "86003": {"name": "Hersham", "lat": 51.37657739, "lon": -0.389320867, "category": "C2"}, "87219": {"name": "Clapham Junction (C)", "lat": 51.4632879, "lon": -0.170329358, "category": "B"}, "87214": {"name": "Vauxhall (Main)", "lat": 51.48486041, "lon": -0.121950266, "category": "B"}, "87139": {"name": "Mortlake", "lat": 51.46834774, "lon": -0.266591797, "category": "C2"}, "87152": {"name": "Putney", "lat": 51.46130128, "lon": -0.216474611, "category": "C1"}, "87133": {"name": "St Margarets (Greater London)", "lat": 51.4547426, "lon": -0.320362499, "category": "C2"}, "87303": {"name": "Stoneleigh", "lat": 51.36375153, "lon": -0.247560051, "category": "C2"}, "87134": {"name": "Strawberry Hill", "lat": 51.43972986, "lon": -0.339618379, "category": "C2"}, "87126": {"name": "Whitton", "lat": 51.44896089, "lon": -0.356553252, "category": "C2"}, "87031": {"name": "Aldershot", "lat": 51.24621065, "lon": -0.760667795, "category": "C2"}, "87057": {"name": "Godalming", "lat": 51.18617613, "lon": -0.619189373, "category": "C2"}, "87052": {"name": "Guildford", "lat": 51.23698679, "lon": -0.581856984, "category": "B"}, "87062": {"name": "Haslemere", "lat": 51.08839625, "lon": -0.719198153, "category": "C2"}, "87016": {"name": "Wanborough", "lat": 51.24428893, "lon": -0.667594547, "category": "C2"}, "87059": {"name": "Milford", "lat": 51.16390391, "lon": -0.637016941, "category": "C2"}, "87301": {"name": "Motspur Park", "lat": 51.39509983, "lon": -0.239175061, "category": "C2"}, "87066": {"name": "Petersfield", "lat": 51.0069981, "lon": -0.942370644, "category": "C2"}, "86122": {"name": "Salisbury", "lat": 51.07097137, "lon": -1.805842825, "category": "C1"}, "87103": {"name": "Ascot", "lat": 51.40625928, "lon": -0.677270535, "category": "C2"}, "87117": {"name": "Ashford (Surrey)", "lat": 51.44339459, "lon": -0.458487355, "category": "C2"}, "87107": {"name": "Egham", "lat": 51.42987849, "lon": -0.5456849, "category": "C2"}, "87114": {"name": "Staines", "lat": 51.43293072, "lon": -0.50242966, "category": "C2"}, "87104": {"name": "Sunningdale", "lat": 51.39226435, "lon": -0.633117298, "category": "C2"}, "86023": {"name": "West Byfleet", "lat": 51.33944958, "lon": -0.505477917, "category": "C2"}, "86031": {"name": "Woking", "lat": 51.31762521, "lon": -0.557847155, "category": "B"}, "86041": {"name": "Brookwood", "lat": 51.30327184, "lon": -0.635762287, "category": "C2"}, "87101": {"name": "Bracknell", "lat": 51.41247267, "lon": -0.751864289, "category": "C2"}, "87004": {"name": "Wokingham", "lat": 51.41160417, "lon": -0.842476004, "category": "C2"}, "82241": {"name": "Witham (Som)", "lat": 51.16496708, "lon": -2.368930508, "category": "C2"}, "83431": {"name": "Exeter Central", "lat": 50.72653784, "lon": -3.53292449, "category": "C1"}, "82332": {"name": "Gillingham (Dorset)", "lat": 51.03915985, "lon": -2.231962301, "category": "C1"}, "86921": {"name": "Bournemouth", "lat": 50.72664451, "lon": -1.863938267, "category": "C1"}, "86911": {"name": "New Milton", "lat": 50.75589916, "lon": -1.658293772, "category": "C2"}, "86935": {"name": "Poole", "lat": 50.71952864, "lon": -1.984365954, "category": "C1"}, "86901": {"name": "Brockenhurst", "lat": 50.81677195, "lon": -1.574099606, "category": "C2"}, "86087": {"name": "Eastleigh", "lat": 50.96950603, "lon": -1.349112597, "category": "C1"}, "86091": {"name": "Eastleigh Hs", "lat": 50.97117355, "lon": -1.326017027, "category": "C1"}, "86241": {"name": "Fareham", "lat": 50.85342744, "lon": -1.19303909, "category": "C2"}, "86083": {"name": "Winchester", "lat": 51.06646119, "lon": -1.320638687, "category": "C1"}, "86520": {"name": "Southampton Central", "lat": 50.90780166, "lon": -1.413975602, "category": "B"}, "86964": {"name": "Wareham", "lat": 50.70866877, "lon": -2.127408435, "category": "C2"}, "86981": {"name": "Weymouth", "lat": 50.62069953, "lon": -2.457666795, "category": "C1"}, "54293": {"name": "Highbury&Islington", "lat": 51.54588089, "lon": -0.105001875, "category": "C2"}, "53307": {"name": "Palmers Green", "lat": 51.61881053, "lon": -0.110632647, "category": "C2"}, "54001": {"name": "Potters Bar", "lat": 51.69745891, "lon": -0.194181627, "category": "C2"}, "53501": {"name": "Hatfield", "lat": 51.76433628, "lon": -0.216150214, "category": "C2"}, "53241": {"name": "Hertford North", "lat": 51.79837099, "lon": -0.092983725, "category": "C2"}, "53221": {"name": "Hitchin", "lat": 51.95296135, "lon": -0.262518185, "category": "C2"}, "53223": {"name": "Stevenage", "lat": 51.91537678, "lon": -0.214532286, "category": "C1"}, "45201": {"name": "Huntingdon", "lat": 52.3286476, "lon": -0.192068055, "category": "C2"}, "54238": {"name": "Finsbury Park London", "lat": 51.56475245, "lon": -0.104217355, "category": "C2"}, "54311": {"name": "King's Cross London", "lat": 51.5327022, "lon": -0.124292928, "category": "A"}, "45106": {"name": "Peterborough", "lat": 52.57497406, "lon": -0.249836973, "category": "B"}, "45008": {"name": "Stamford", "lat": 52.64738652, "lon": -0.480500188, "category": "C1"}, "53401": {"name": "Welwyn Garden City", "lat": 51.80102707, "lon": -0.204549884, "category": "C1"}, "44038": {"name": "Lincoln", "lat": 53.2261889, "lon": -0.539484032, "category": "C1"}, "44101": {"name": "Ancaster", "lat": 52.98791124, "lon": -0.535616132, "category": "B"}, "23421": {"name": "Doncaster", "lat": 53.5223771, "lon": -1.140217806, "category": "B"}, "44421": {"name": "Grantham", "lat": 52.90648875, "lon": -0.643936722, "category": "C1"}, "44304": {"name": "Newark North Gate", "lat": 53.08166593, "lon": -0.799677998, "category": "C1"}, "23491": {"name": "Retford", "lat": 53.31500412, "lon": -0.949253722, "category": "C2"}, "27263": {"name": "Chesterfield", "lat": 53.23732197, "lon": -1.42012811, "category": "C1"}, "25316": {"name": "Meadowhall", "lat": 53.41707136, "lon": -1.414677626, "category": "C2"}, "24108": {"name": "Swinton", "lat": 53.48570638, "lon": -1.30673432, "category": "C1"}, "25701": {"name": "Sheffield", "lat": 53.3786417, "lon": -1.461805033, "category": "B"}, "24385": {"name": "Barnsley", "lat": 53.55398928, "lon": -1.477696991, "category": "C2"}, "47412": {"name": "Bishops Stortford", "lat": 51.8667313, "lon": 0.165549764, "category": "C2"}, "50204": {"name": "Braintree", "lat": 51.87506352, "lon": 0.556770217, "category": "C2"}, "51722": {"name": "Broxbourne", "lat": 51.74665786, "lon": -0.011141199, "category": "C2"}, "51720": {"name": "Broxbourne Jn", "lat": 51.76256126, "lon": 0.00549846, "category": "C2"}, "51815": {"name": "Cheshunt", "lat": 51.70282306, "lon": -0.02464217, "category": "C2"}, "51918": {"name": "Ponders End", "lat": 51.64273895, "lon": -0.034481384, "category": "C2"}, "51711": {"name": "St Margarets (Hertfordshire)", "lat": 51.78781952, "lon": 0.00081879, "category": "C2"}, "47611": {"name": "Harlow Town", "lat": 51.78168618, "lon": 0.09478347, "category": "C1"}, "47344": {"name": "Stansted Airport", "lat": 51.88443229, "lon": 0.228884922, "category": "B"}, "50223": {"name": "Chelmsford", "lat": 51.73664303, "lon": 0.46928221, "category": "C1"}, "50113": {"name": "Kelvedon", "lat": 51.84035257, "lon": 0.701435594, "category": "C2"}, "50211": {"name": "Witham", "lat": 51.80798388, "lon": 0.654945372, "category": "C2"}, "50049": {"name": "Colchester", "lat": 51.90055797, "lon": 0.892588251, "category": "B"}, "52053": {"name": "Highbury & Islington", "lat": 51.54677954, "lon": -0.104964536, "category": "C2"}, "52736": {"name": "Hackney Downs", "lat": 51.54874512, "lon": -0.060170418, "category": "C2"}, "50327": {"name": "Billericay", "lat": 51.62894073, "lon": 0.415742798, "category": "C2"}, "50331": {"name": "Brentwood", "lat": 51.61416297, "lon": 0.300841907, "category": "C2"}, "50405": {"name": "Chadwell Heath", "lat": 51.56796007, "lon": 0.128233285, "category": "C2"}, "50435": {"name": "Forest Gate", "lat": 51.54913012, "lon": 0.023502925, "category": "C2"}, "50434": {"name": "Forest Gate Jn", "lat": 51.55070278, "lon": 0.036554502, "category": "C2"}, "50334": {"name": "Gidea Park", "lat": 51.58182295, "lon": 0.2053831, "category": "C2"}, "50339": {"name": "Gidea Park Jn", "lat": 51.5845206, "lon": 0.212081804, "category": "C2"}, "50412": {"name": "Goodmayes", "lat": 51.56555114, "lon": 0.112248777, "category": "C2"}, "50333": {"name": "Harold Wood", "lat": 51.59385553, "lon": 0.23484255, "category": "C2"}, "50423": {"name": "Ilford", "lat": 51.55913351, "lon": 0.068670371, "category": "C2"}, "50431": {"name": "Manor Park", "lat": 51.55234946, "lon": 0.045282902, "category": "C2"}, "50321": {"name": "Rayleigh", "lat": 51.58993054, "lon": 0.599918841, "category": "C2"}, "50316": {"name": "Rochford", "lat": 51.58132997, "lon": 0.701918833, "category": "C2"}, "50401": {"name": "Romford", "lat": 51.57506656, "lon": 0.181964358, "category": "C2"}, "50328": {"name": "Shenfield", "lat": 51.6306915, "lon": 0.329133747, "category": "B"}, "50324": {"name": "Wickford", "lat": 51.61507819, "lon": 0.519014873, "category": "C2"}, "50308": {"name": "South Woodham Ferrers", "lat": 51.64914767, "lon": 0.60619824, "category": "C2"}, "50417": {"name": "Seven Kings", "lat": 51.56403854, "lon": 0.096307228, "category": "C2"}, "52731": {"name": "Chingford", "lat": 51.6329951, "lon": 0.009893071, "category": "C2"}, "52732": {"name": "Highams Park", "lat": 51.6079829, "lon": 0.000122725, "category": "C2"}, "51949": {"name": "Edmonton Green", "lat": 51.62430051, "lon": -0.061283681, "category": "C2"}, "52733": {"name": "Walthamstow Central", "lat": 51.58224191, "lon": -0.019772207, "category": "C2"}, "51946": {"name": "Enfield Town", "lat": 51.65154394, "lon": -0.077468651, "category": "C2"}, "52741": {"name": "Liverpool Street London", "lat": 51.51849986, "lon": -0.080193813, "category": "A"}, "52226": {"name": "Stratford", "lat": 51.54162624, "lon": -0.003552643, "category": "B"}, "46301": {"name": "Bury St Edmunds", "lat": 52.25379413, "lon": 0.711843395, "category": "C2"}, "46306": {"name": "Bury St Edmunds Fhh", "lat": 55.7579368, "lon": -4.584820582, "category": "C2"}, "47221": {"name": "Cambridge", "lat": 52.19455817, "lon": 0.13755327, "category": "B"}, "46277": {"name": "Chippenham Jn", "lat": 52.26449912, "lon": 0.426698868, "category": "C1"}, "47331": {"name": "Newport (Essex)", "lat": 51.96375635, "lon": 0.207795282, "category": "B"}, "46252": {"name": "Watlington", "lat": 52.67183389, "lon": 0.382651704, "category": "C2"}, "50311": {"name": "Southend Victoria", "lat": 51.54244422, "lon": 0.711152438, "category": "C1"}, "51014": {"name": "Benfleet", "lat": 51.54401569, "lon": 0.561241496, "category": "C2"}, "51311": {"name": "Grays", "lat": 51.47526878, "lon": 0.3212065, "category": "C2"}, "51301": {"name": "Laindon", "lat": 51.56761638, "lon": 0.424034229, "category": "C2"}, "51013": {"name": "Leigh-On-Sea", "lat": 51.54139272, "lon": 0.638976066, "category": "C2"}, "51016": {"name": "Pitsea", "lat": 51.56046925, "lon": 0.507338057, "category": "C2"}, "51347": {"name": "Rainham (Greater London)", "lat": 51.50969597, "lon": 0.187831999, "category": "C2"}, "51007": {"name": "Southend Central", "lat": 51.53705542, "lon": 0.710832063, "category": "C1"}, "51351": {"name": "Upminster", "lat": 51.55845774, "lon": 0.251861805, "category": "C2"}, "51011": {"name": "Chalkwell", "lat": 51.53887896, "lon": 0.67055882, "category": "C2"}, "52711": {"name": "Fenchurch Street London", "lat": 51.51126356, "lon": -0.077615744, "category": "A"}, "51531": {"name": "Barking", "lat": 51.54003456, "lon": 0.080782931, "category": "B"}, "51019": {"name": "Basildon", "lat": 51.56845069, "lon": 0.470257055, "category": "C2"}, "14031": {"name": "Sunderland", "lat": 54.90614944, "lon": -1.382370004, "category": "C2"}, "12931": {"name": "Newcastle", "lat": 54.96822307, "lon": -1.61728169, "category": "A"}, "13702": {"name": "Durham", "lat": 54.77939123, "lon": -1.581752098, "category": "C1"}, "12106": {"name": "Belford", "lat": 55.60757438, "lon": -1.817434171, "category": "C1"}, "12001": {"name": "Berwick-Upon-Tweed", "lat": 55.77393456, "lon": -2.011132859, "category": "C1"}, "15866": {"name": "Darlington", "lat": 54.52044297, "lon": -1.545779184, "category": "B"}, "15449": {"name": "Middlesbrough", "lat": 54.57908487, "lon": -1.23416077, "category": "C1"}, "14261": {"name": "Greatham", "lat": 54.61008008, "lon": -1.26443656, "category": "C1"}, "19031": {"name": "Cottingham", "lat": 53.78182766, "lon": -0.406427171, "category": "B"}, "16232": {"name": "Malton", "lat": 54.13153498, "lon": -0.797084743, "category": "C2"}, "16201": {"name": "Scarborough", "lat": 54.27979093, "lon": -0.40570306, "category": "C1"}, "16102": {"name": "Harrogate", "lat": 53.99195618, "lon": -1.537819724, "category": "C1"}, "16416": {"name": "York", "lat": 53.95796604, "lon": -1.0931822, "category": "A"}, "18641": {"name": "Bradford Interchange", "lat": 53.79125602, "lon": -1.749503751, "category": "C1"}, "17019": {"name": "Bradford Forster Square", "lat": 53.79575312, "lon": -1.750995085, "category": "C2"}, "18464": {"name": "Halifax", "lat": 53.72042388, "lon": -1.854486027, "category": "C2"}, "18474": {"name": "Huddersfield", "lat": 53.64841449, "lon": -1.785144689, "category": "B"}, "17011": {"name": "Keighley", "lat": 53.86697524, "lon": -1.901119774, "category": "C2"}, "17132": {"name": "Leeds", "lat": 53.79516409, "lon": -1.549093312, "category": "A"}, "17038": {"name": "Baildon", "lat": 53.84968639, "lon": -1.753715549, "category": "C2"}, "18067": {"name": "Wakefield Westgate", "lat": 53.68174537, "lon": -1.50639867, "category": "B"}, "3110": {"name": "Stanley (Perth)", "lat": 56.49594844, "lon": -3.451250004, "category": "C2"}, "7222": {"name": "Lugton", "lat": 55.75912218, "lon": -4.463722052, "category": "B"}, "36091": {"name": "Liverpool South Parkway", "lat": 57.26277434, "lon": 0.710492995, "category": "B"}, "7575": {"name": "Queen's Park (Strathclyde)", "lat": 55.83570315, "lon": -4.267332821, "category": "C2"}, "52249": {"name": "West Ham", "lat": 51.52875964, "lon": 0.005298851, "category": "C1"}};
+        var timelineData = {"19:00": {"51353": 0, "66409": 0, "69202": 0, "70100": 0, "70030": 0, "65630": 0, "69215": 0, "65043": 0, "42140": 0, "43314": 0, "43211": 0, "69001": 0, "70306": 0, "70319": 0, "70321": 0, "70261": 0, "70421": 0, "71011": 0, "70411": 0, "72007": 0, "72017": 0, "71040": 0, "72311": 0, "72021": 0, "72410": 0, "63021": 0, "62203": 0, "62400": 0, "63630": 0, "57009": 0, "57403": 0, "55247": 0, "55120": 0, "61009": 0, "55118": 0, "59301": 0, "59002": 0, "59133": 0, "57604": 0, "61100": 0, "59241": 0, "11271": 0, "9161": 0, "36027": 0, "None": 0, "35437": 0, "37005": 0, "37003": 0, "36080": 0, "38183": 0, "36151": 0, "36029": 0, "37001": 0, "36501": 0, "37129": 0, "35136": 0, "35531": 0, "40320": 0, "40036": 0, "40050": 0, "29057": 0, "31620": 0, "11720": 0, "29150": 0, "30021": 0, "30033": 0, "30120": 0, "32583": 0, "32534": 0, "32568": 0, "31521": 0, "35146": 0, "37225": 0, "32554": 0, "32571": 0, "32255": 0, "31033": 0, "32530": 0, "33087": 0, "32000": 0, "31510": 0, "74451": 0, "74465": 0, "74313": 0, "73503": 0, "74803": 0, "73000": 0, "74446": 0, "74005": 0, "74237": 0, "73822": 0, "73253": 0, "81109": 0, "81700": 0, "75352": 0, "81501": 0, "75012": 0, "81911": 0, "83421": 0, "83624": 0, "83631": 0, "83628": 0, "83009": 0, "85734": 0, "85303": 0, "85501": 0, "84139": 0, "76357": 0, "76401": 0, "79791": 0, "77301": 0, "78451": 0, "78215": 0, "79304": 0, "64224": 0, "69424": 0, "66411": 0, "66461": 0, "69300": 0, "65033": 0, "64813": 0, "64827": 0, "68076": 0, "68089": 0, "67116": 0, "67195": 0, "88315": 0, "88415": 0, "88477": 0, "87249": 0, "89347": 0, "88493": 0, "88486": 0, "88422": 0, "88421": 0, "88416": 0, "88466": 0, "88438": 0, "88418": 0, "88451": 0, "87245": 0, "89403": 0, "88457": 0, "88459": 0, "87244": 11.5, "88491": 0, "88492": 0, "89351": 0, "88461": 0, "88419": 0, "88601": 0, "89402": 0, "88481": 0, "88403": 0, "88401": 0, "88410": 0, "88517": 0, "89011": 0, "89144": 0, "89007": 0, "89004": 0, "88285": 0, "89315": 0, "89331": 0, "89326": 0, "89363": 0, "89375": 0, "86451": 0, "86424": 0, "86342": 0, "87980": 0, "88103": 0, "87640": 0, "87941": 11.0, "87938": 0, "87939": 0, "88221": 0, "87603": 0, "87701": 0, "87687": 0, "87681": 0, "87627": 0, "87685": 0, "87643": 0, "87751": 0, "87801": 0, "87631": 0, "87671": 0, "87708": 0, "87635": 0, "87663": 0, "87222": 0, "87651": 0, "87679": 0, "87911": 0, "87633": 0, "87621": 0, "88254": 0, "87722": 0, "87971": 0, "87759": 0, "87973": 0, "87967": 0, "87920": 0, "86074": 0, "86066": 0, "86042": 0, "86045": 0, "86295": 0, "86341": 0, "86313": 0, "86311": 0, "86310": 0, "87021": 0, "87026": 0, "87149": 0, "87144": 0, "87069": 0, "87121": 0, "87158": 0, "87181": 0, "87169": 0, "87163": 0, "87271": 0, "87135": 0, "87171": 0, "87159": 0, "87131": 0, "87119": 0, "87153": 0, "86005": 0, "87261": 0, "87302": 0, "87304": 0, "86003": 0, "87219": 0, "87214": 0, "87139": 0, "87152": 0, "87133": 0, "87303": 0, "87134": 0, "87126": 0, "87031": 0, "87057": 0, "87052": 0, "87062": 0, "87016": 0, "87059": 0, "87301": 0, "87066": 0, "86122": 0, "87103": 0, "87117": 0, "87107": 0, "87114": 0, "87104": 0, "86023": 0, "86031": 0, "86041": 0, "87101": 0, "87004": 0, "82241": 0, "83431": 0, "82332": 0, "86921": 0, "86911": 0, "86935": 0, "86901": 0, "86087": 0, "86091": 0, "86241": 0, "86083": 0, "86520": 0, "86964": 0, "86981": 0, "54293": 0, "53307": 0, "54001": 0, "53501": 0, "53241": 0, "53221": 0, "53223": 0, "45201": 3.0, "54238": 0, "54311": 195.0, "45106": 48.0, "45008": 0, "53401": 15.0, "44038": 0, "44101": 0, "23421": 0, "44421": 0, "44304": 0, "23491": 0, "27263": 0, "25316": 0, "24108": 0, "25701": 0, "24385": 0, "47412": 0, "50204": 0, "51722": 0, "51720": 0, "51815": 0, "51918": 0, "51711": 0, "47611": 0, "47344": 0, "50223": 0, "50113": 0, "50211": 0, "50049": 0, "52053": 0, "52736": 0, "50327": 0, "50331": 0, "50405": 0, "50435": 0, "50434": 0, "50334": 0, "50339": 0, "50412": 0, "50333": 0, "50423": 0, "50431": 0, "50321": 0, "50316": 0, "50401": 0, "50328": 0, "50324": 0, "50308": 0, "50417": 0, "52731": 0, "52732": 0, "51949": 0, "52733": 0, "51946": 0, "52741": 0, "52226": 0, "46301": 0, "46306": 0, "47221": 20.0, "46277": 0, "47331": 0, "46252": 0, "50311": 0, "51014": 0, "51311": 0, "51301": 0, "51013": 0, "51016": 0, "51347": 0, "51007": 0, "51351": 0, "51011": 0, "52711": 0, "51531": 0, "51019": 0, "14031": 0, "12931": 0, "13702": 0, "12106": 0, "12001": 0, "15866": 0, "15449": 0, "14261": 0, "19031": 0, "16232": 0, "16201": 0, "16102": 0, "16416": 0, "18641": 0, "17019": 0, "18464": 0, "18474": 0, "17011": 0, "17132": 0, "17038": 0, "18067": 0, "3110": 0, "7222": 0, "36091": 0, "7575": 0, "52249": 0}, "19:10": {"51353": 0, "66409": 0, "69202": 0, "70100": 0, "70030": 0, "65630": 0, "69215": 0, "65043": 0, "42140": 0, "43314": 0, "43211": 0, "69001": 0, "70306": 0, "70319": 0, "70321": 0, "70261": 0, "70421": 0, "71011": 0, "70411": 0, "72007": 0, "72017": 0, "71040": 0, "72311": 0, "72021": 0, "72410": 0, "63021": 0, "62203": 0, "62400": 0, "63630": 0, "57009": 0, "57403": 0, "55247": 0, "55120": 0, "61009": 0, "55118": 0, "59301": 0, "59002": 0, "59133": 0, "57604": 0, "61100": 0, "59241": 0, "11271": 0, "9161": 0, "36027": 0, "None": 0, "35437": 0, "37005": 0, "37003": 0, "36080": 0, "38183": 0, "36151": 0, "36029": 0, "37001": 0, "36501": 0, "37129": 0, "35136": 0, "35531": 0, "40320": 0, "40036": 0, "40050": 0, "29057": 0, "31620": 0, "11720": 0, "29150": 0, "30021": 0, "30033": 0, "30120": 0, "32583": 0, "32534": 0, "32568": 0, "31521": 0, "35146": 0, "37225": 0, "32554": 0, "32571": 0, "32255": 0, "31033": 0, "32530": 0, "33087": 0, "32000": 0, "31510": 0, "74451": 0, "74465": 0, "74313": 0, "73503": 0, "74803": 0, "73000": 0, "74446": 0, "74005": 0, "74237": 0, "73822": 0, "73253": 0, "81109": 0, "81700": 0, "75352": 0, "81501": 0, "75012": 0, "81911": 0, "83421": 0, "83624": 0, "83631": 0, "83628": 0, "83009": 0, "85734": 0, "85303": 0, "85501": 0, "84139": 0, "76357": 0, "76401": 0, "79791": 0, "77301": 0, "78451": 0, "78215": 0, "79304": 0, "64224": 0, "69424": 0, "66411": 0, "66461": 0, "69300": 0, "65033": 0, "64813": 0, "64827": 0, "68076": 0, "68089": 0, "67116": 0, "67195": 0, "88315": 0, "88415": 0, "88477": 0, "87249": 0, "89347": 0, "88493": 0, "88486": 0, "88422": 0, "88421": 0, "88416": 0, "88466": 0, "88438": 0, "88418": 0, "88451": 0, "87245": 7.0, "89403": 0, "88457": 0, "88459": 0, "87244": 0, "88491": 0, "88492": 0, "89351": 0, "88461": 0, "88419": 0, "88601": 0, "89402": 0, "88481": 0, "88403": 0, "88401": 0, "88410": 0, "88517": 0, "89011": 0, "89144": 0, "89007": 0, "89004": 0, "88285": 0, "89315": 0, "89331": 0, "89326": 0, "89363": 0, "89375": 0, "86451": 0, "86424": 0, "86342": 0, "87980": 23.0, "88103": 0, "87640": 0, "87941": 0, "87938": 0, "87939": 0, "88221": 0, "87603": 0, "87701": 0, "87687": 0, "87681": 0, "87627": 0, "87685": 0, "87643": 0, "87751": 0, "87801": 0, "87631": 0, "87671": 0, "87708": 0, "87635": 0, "87663": 0, "87222": 0, "87651": 0, "87679": 0, "87911": 0, "87633": 0, "87621": 0, "88254": 0, "87722": 0, "87971": 0, "87759": 0, "87973": 0, "87967": 0, "87920": 0, "86074": 0, "86066": 0, "86042": 0, "86045": 0, "86295": 0, "86341": 0, "86313": 0, "86311": 0, "86310": 0, "87021": 0, "87026": 0, "87149": 0, "87144": 0, "87069": 0, "87121": 0, "87158": 0, "87181": 0, "87169": 0, "87163": 0, "87271": 0, "87135": 0, "87171": 0, "87159": 0, "87131": 0, "87119": 0, "87153": 0, "86005": 0, "87261": 0, "87302": 0, "87304": 0, "86003": 0, "87219": 0, "87214": 0, "87139": 0, "87152": 0, "87133": 0, "87303": 0, "87134": 0, "87126": 0, "87031": 0, "87057": 0, "87052": 0, "87062": 0, "87016": 0, "87059": 0, "87301": 0, "87066": 0, "86122": 0, "87103": 0, "87117": 0, "87107": 0, "87114": 0, "87104": 0, "86023": 0, "86031": 0, "86041": 0, "87101": 0, "87004": 0, "82241": 0, "83431": 0, "82332": 0, "86921": 0, "86911": 0, "86935": 0, "86901": 0, "86087": 0, "86091": 0, "86241": 0, "86083": 0, "86520": 0, "86964": 0, "86981": 0, "54293": 0, "53307": 0, "54001": 0, "53501": 0, "53241": 0, "53221": 0, "53223": 0, "45201": 0, "54238": 0, "54311": 60.0, "45106": 0, "45008": 0, "53401": 0, "44038": 0, "44101": 0, "23421": 0, "44421": 0, "44304": 0, "23491": 0, "27263": 0, "25316": 0, "24108": 0, "25701": 0, "24385": 0, "47412": 0, "50204": 0, "51722": 0, "51720": 0, "51815": 0, "51918": 0, "51711": 0, "47611": 0, "47344": 0, "50223": 0, "50113": 0, "50211": 0, "50049": 0, "52053": 0, "52736": 0, "50327": 0, "50331": 0, "50405": 0, "50435": 0, "50434": 0, "50334": 0, "50339": 0, "50412": 0, "50333": 0, "50423": 0, "50431": 0, "50321": 0, "50316": 0, "50401": 0, "50328": 0, "50324": 0, "50308": 0, "50417": 0, "52731": 0, "52732": 0, "51949": 0, "52733": 0, "51946": 0, "52741": 0, "52226": 0, "46301": 0, "46306": 0, "47221": 0, "46277": 0, "47331": 0, "46252": 0, "50311": 0, "51014": 0, "51311": 0, "51301": 0, "51013": 0, "51016": 0, "51347": 0, "51007": 0, "51351": 0, "51011": 0, "52711": 0, "51531": 0, "51019": 0, "14031": 0, "12931": 0, "13702": 0, "12106": 0, "12001": 0, "15866": 0, "15449": 0, "14261": 0, "19031": 0, "16232": 0, "16201": 0, "16102": 0, "16416": 0, "18641": 0, "17019": 0, "18464": 0, "18474": 0, "17011": 0, "17132": 60.0, "17038": 0, "18067": 0, "3110": 0, "7222": 0, "36091": 0, "7575": 0, "52249": 0}, "19:20": {"51353": 0, "66409": 0, "69202": 0, "70100": 0, "70030": 0, "65630": 0, "69215": 0, "65043": 0, "42140": 0, "43314": 0, "43211": 0, "69001": 0, "70306": 0, "70319": 0, "70321": 0, "70261": 0, "70421": 0, "71011": 0, "70411": 0, "72007": 0, "72017": 0, "71040": 0, "72311": 0, "72021": 0, "72410": 0, "63021": 0, "62203": 0, "62400": 0, "63630": 0, "57009": 0, "57403": 0, "55247": 0, "55120": 0, "61009": 0, "55118": 0, "59301": 0, "59002": 0, "59133": 0, "57604": 0, "61100": 0, "59241": 0, "11271": 0, "9161": 0, "36027": 0, "None": 0, "35437": 0, "37005": 0, "37003": 0, "36080": 0, "38183": 0, "36151": 0, "36029": 0, "37001": 0, "36501": 0, "37129": 0, "35136": 0, "35531": 0, "40320": 0, "40036": 0, "40050": 0, "29057": 0, "31620": 0, "11720": 0, "29150": 0, "30021": 0, "30033": 0, "30120": 0, "32583": 0, "32534": 0, "32568": 0, "31521": 0, "35146": 0, "37225": 0, "32554": 0, "32571": 0, "32255": 0, "31033": 0, "32530": 0, "33087": 0, "32000": 0, "31510": 0, "74451": 0, "74465": 0, "74313": 0, "73503": 0, "74803": 0, "73000": 0, "74446": 0, "74005": 0, "74237": 0, "73822": 0, "73253": 0, "81109": 0, "81700": 0, "75352": 0, "81501": 0, "75012": 0, "81911": 0, "83421": 0, "83624": 0, "83631": 0, "83628": 0, "83009": 0, "85734": 0, "85303": 0, "85501": 0, "84139": 0, "76357": 0, "76401": 0, "79791": 0, "77301": 0, "78451": 0, "78215": 0, "79304": 0, "64224": 0, "69424": 0, "66411": 0, "66461": 0, "69300": 0, "65033": 0, "64813": 0, "64827": 0, "68076": 0, "68089": 0, "67116": 0, "67195": 0, "88315": 0, "88415": 0, "88477": 0, "87249": 0, "89347": 0, "88493": 0, "88486": 0, "88422": 0, "88421": 0, "88416": 0, "88466": 0, "88438": 0, "88418": 0, "88451": 0, "87245": 42.0, "89403": 0, "88457": 0, "88459": 0, "87244": 0, "88491": 0, "88492": 0, "89351": 0, "88461": 0, "88419": 0, "88601": 0, "89402": 0, "88481": 0, "88403": 0, "88401": 0, "88410": 0, "88517": 0, "89011": 0, "89144": 0, "89007": 0, "89004": 0, "88285": 0, "89315": 0, "89331": 0, "89326": 0, "89363": 0, "89375": 0, "86451": 0, "86424": 0, "86342": 0, "87980": 0, "88103": 0, "87640": 0, "87941": 23.0, "87938": 0, "87939": 0, "88221": 0, "87603": 28.0, "87701": 0, "87687": 0, "87681": 0, "87627": 0, "87685": 0, "87643": 28.0, "87751": 0, "87801": 0, "87631": 0, "87671": 0, "87708": 0, "87635": 0, "87663": 0, "87222": 0, "87651": 0, "87679": 0, "87911": 0, "87633": 0, "87621": 0, "88254": 0, "87722": 0, "87971": 0, "87759": 0, "87973": 0, "87967": 0, "87920": 0, "86074": 0, "86066": 0, "86042": 0, "86045": 0, "86295": 0, "86341": 0, "86313": 0, "86311": 0, "86310": 0, "87021": 0, "87026": 0, "87149": 0, "87144": 0, "87069": 0, "87121": 0, "87158": 0, "87181": 0, "87169": 0, "87163": 0, "87271": 0, "87135": 0, "87171": 0, "87159": 0, "87131": 0, "87119": 0, "87153": 0, "86005": 0, "87261": 0, "87302": 0, "87304": 0, "86003": 0, "87219": 0, "87214": 0, "87139": 0, "87152": 0, "87133": 0, "87303": 0, "87134": 0, "87126": 0, "87031": 0, "87057": 0, "87052": 0, "87062": 0, "87016": 0, "87059": 0, "87301": 0, "87066": 0, "86122": 0, "87103": 0, "87117": 0, "87107": 0, "87114": 0, "87104": 0, "86023": 0, "86031": 0, "86041": 0, "87101": 0, "87004": 0, "82241": 0, "83431": 0, "82332": 0, "86921": 0, "86911": 0, "86935": 0, "86901": 0, "86087": 0, "86091": 0, "86241": 0, "86083": 0, "86520": 0, "86964": 0, "86981": 0, "54293": 0, "53307": 0, "54001": 0, "53501": 0, "53241": 0, "53221": 0, "53223": 61.0, "45201": 0, "54238": 0, "54311": 30.0, "45106": 30.0, "45008": 0, "53401": 0, "44038": 0, "44101": 0, "23421": 0, "44421": 0, "44304": 0, "23491": 0, "27263": 0, "25316": 0, "24108": 0, "25701": 0, "24385": 0, "47412": 0, "50204": 0, "51722": 0, "51720": 0, "51815": 0, "51918": 0, "51711": 0, "47611": 0, "47344": 0, "50223": 0, "50113": 0, "50211": 0, "50049": 0, "52053": 0, "52736": 0, "50327": 0, "50331": 0, "50405": 0, "50435": 0, "50434": 0, "50334": 0, "50339": 0, "50412": 0, "50333": 0, "50423": 0, "50431": 0, "50321": 0, "50316": 0, "50401": 0, "50328": 0, "50324": 0, "50308": 0, "50417": 0, "52731": 0, "52732": 0, "51949": 0, "52733": 0, "51946": 0, "52741": 0, "52226": 0, "46301": 0, "46306": 0, "47221": 30.0, "46277": 0, "47331": 0, "46252": 0, "50311": 0, "51014": 0, "51311": 0, "51301": 0, "51013": 0, "51016": 0, "51347": 0, "51007": 0, "51351": 0, "51011": 0, "52711": 0, "51531": 0, "51019": 0, "14031": 0, "12931": 0, "13702": 0, "12106": 0, "12001": 0, "15866": 0, "15449": 0, "14261": 0, "19031": 0, "16232": 0, "16201": 0, "16102": 0, "16416": 0, "18641": 0, "17019": 0, "18464": 0, "18474": 0, "17011": 0, "17132": 0, "17038": 0, "18067": 0, "3110": 0, "7222": 0, "36091": 0, "7575": 0, "52249": 0}, "19:30": {"51353": 0, "66409": 0, "69202": 0, "70100": 0, "70030": 0, "65630": 0, "69215": 0, "65043": 0, "42140": 0, "43314": 0, "43211": 0, "69001": 0, "70306": 0, "70319": 0, "70321": 0, "70261": 0, "70421": 0, "71011": 0, "70411": 0, "72007": 0, "72017": 0, "71040": 0, "72311": 0, "72021": 0, "72410": 0, "63021": 0, "62203": 0, "62400": 0, "63630": 0, "57009": 0, "57403": 0, "55247": 0, "55120": 0, "61009": 0, "55118": 0, "59301": 0, "59002": 0, "59133": 0, "57604": 0, "61100": 0, "59241": 0, "11271": 0, "9161": 0, "36027": 0, "None": 0, "35437": 0, "37005": 0, "37003": 0, "36080": 0, "38183": 0, "36151": 0, "36029": 0, "37001": 0, "36501": 0, "37129": 0, "35136": 0, "35531": 0, "40320": 0, "40036": 0, "40050": 0, "29057": 0, "31620": 0, "11720": 0, "29150": 0, "30021": 0, "30033": 0, "30120": 0, "32583": 0, "32534": 0, "32568": 0, "31521": 0, "35146": 0, "37225": 0, "32554": 0, "32571": 0, "32255": 0, "31033": 0, "32530": 0, "33087": 0, "32000": 0, "31510": 0, "74451": 0, "74465": 0, "74313": 0, "73503": 0, "74803": 0, "73000": 0, "74446": 0, "74005": 0, "74237": 0, "73822": 0, "73253": 0, "81109": 0, "81700": 0, "75352": 0, "81501": 0, "75012": 0, "81911": 0, "83421": 0, "83624": 0, "83631": 0, "83628": 0, "83009": 0, "85734": 0, "85303": 0, "85501": 0, "84139": 0, "76357": 0, "76401": 0, "79791": 0, "77301": 0, "78451": 0, "78215": 0, "79304": 0, "64224": 0, "69424": 0, "66411": 0, "66461": 0, "69300": 0, "65033": 0, "64813": 0, "64827": 0, "68076": 0, "68089": 0, "67116": 0, "67195": 0, "88315": 0, "88415": 0, "88477": 0, "87249": 0, "89347": 0, "88493": 0, "88486": 0, "88422": 0, "88421": 0, "88416": 0, "88466": 0, "88438": 0, "88418": 0, "88451": 0, "87245": 30.0, "89403": 0, "88457": 0, "88459": 0, "87244": 0, "88491": 0, "88492": 0, "89351": 0, "88461": 0, "88419": 0, "88601": 0, "89402": 0, "88481": 0, "88403": 0, "88401": 0, "88410": 0, "88517": 0, "89011": 0, "89144": 0, "89007": 0, "89004": 0, "88285": 0, "89315": 0, "89331": 0, "89326": 0, "89363": 0, "89375": 0, "86451": 0, "86424": 0, "86342": 0, "87980": 0, "88103": 0, "87640": 0, "87941": 0, "87938": 0, "87939": 0, "88221": 0, "87603": 0, "87701": 0, "87687": 0, "87681": 0, "87627": 0, "87685": 0, "87643": 0, "87751": 0, "87801": 0, "87631": 0, "87671": 0, "87708": 0, "87635": 0, "87663": 0, "87222": 0, "87651": 0, "87679": 0, "87911": 0, "87633": 0, "87621": 0, "88254": 0, "87722": 0, "87971": 0, "87759": 0, "87973": 0, "87967": 0, "87920": 0, "86074": 0, "86066": 0, "86042": 0, "86045": 0, "86295": 0, "86341": 0, "86313": 0, "86311": 0, "86310": 0, "87021": 0, "87026": 0, "87149": 0, "87144": 0, "87069": 0, "87121": 0, "87158": 0, "87181": 0, "87169": 0, "87163": 0, "87271": 0, "87135": 0, "87171": 0, "87159": 0, "87131": 0, "87119": 0, "87153": 0, "86005": 0, "87261": 0, "87302": 0, "87304": 0, "86003": 0, "87219": 0, "87214": 0, "87139": 0, "87152": 0, "87133": 0, "87303": 0, "87134": 0, "87126": 0, "87031": 0, "87057": 0, "87052": 0, "87062": 0, "87016": 0, "87059": 0, "87301": 0, "87066": 0, "86122": 0, "87103": 0, "87117": 0, "87107": 0, "87114": 0, "87104": 0, "86023": 0, "86031": 0, "86041": 0, "87101": 0, "87004": 0, "82241": 0, "83431": 0, "82332": 0, "86921": 0, "86911": 0, "86935": 0, "86901": 0, "86087": 0, "86091": 0, "86241": 0, "86083": 0, "86520": 0, "86964": 0, "86981": 0, "54293": 0, "53307": 0, "54001": 0, "53501": 0, "53241": 0, "53221": 0, "53223": 0, "45201": 0, "54238": 0, "54311": 60.0, "45106": 0, "45008": 0, "53401": 18.0, "44038": 0, "44101": 0, "23421": 0, "44421": 0, "44304": 0, "23491": 0, "27263": 0, "25316": 0, "24108": 0, "25701": 0, "24385": 0, "47412": 0, "50204": 0, "51722": 0, "51720": 0, "51815": 0, "51918": 0, "51711": 0, "47611": 0, "47344": 0, "50223": 0, "50113": 0, "50211": 0, "50049": 0, "52053": 0, "52736": 0, "50327": 0, "50331": 0, "50405": 0, "50435": 0, "50434": 0, "50334": 0, "50339": 0, "50412": 0, "50333": 0, "50423": 0, "50431": 0, "50321": 0, "50316": 0, "50401": 0, "50328": 0, "50324": 0, "50308": 0, "50417": 0, "52731": 0, "52732": 0, "51949": 0, "52733": 0, "51946": 0, "52741": 0, "52226": 0, "46301": 0, "46306": 0, "47221": 0, "46277": 0, "47331": 0, "46252": 0, "50311": 0, "51014": 0, "51311": 0, "51301": 0, "51013": 0, "51016": 0, "51347": 0, "51007": 0, "51351": 0, "51011": 0, "52711": 0, "51531": 0, "51019": 0, "14031": 0, "12931": 0, "13702": 0, "12106": 0, "12001": 0, "15866": 0, "15449": 0, "14261": 0, "19031": 0, "16232": 0, "16201": 0, "16102": 0, "16416": 8.0, "18641": 0, "17019": 0, "18464": 0, "18474": 0, "17011": 0, "17132": 4.0, "17038": 0, "18067": 0, "3110": 0, "7222": 0, "36091": 0, "7575": 0, "52249": 0}, "19:40": {"51353": 0, "66409": 0, "69202": 0, "70100": 0, "70030": 0, "65630": 0, "69215": 0, "65043": 0, "42140": 0, "43314": 0, "43211": 0, "69001": 0, "70306": 0, "70319": 0, "70321": 0, "70261": 0, "70421": 0, "71011": 0, "70411": 0, "72007": 0, "72017": 0, "71040": 0, "72311": 0, "72021": 0, "72410": 0, "63021": 0, "62203": 0, "62400": 0, "63630": 0, "57009": 0, "57403": 0, "55247": 0, "55120": 0, "61009": 0, "55118": 0, "59301": 0, "59002": 0, "59133": 0, "57604": 0, "61100": 0, "59241": 0, "11271": 0, "9161": 0, "36027": 0, "None": 0, "35437": 0, "37005": 0, "37003": 0, "36080": 0, "38183": 0, "36151": 0, "36029": 0, "37001": 0, "36501": 0, "37129": 0, "35136": 0, "35531": 0, "40320": 0, "40036": 0, "40050": 0, "29057": 0, "31620": 0, "11720": 0, "29150": 0, "30021": 0, "30033": 0, "30120": 0, "32583": 0, "32534": 0, "32568": 0, "31521": 0, "35146": 0, "37225": 0, "32554": 0, "32571": 0, "32255": 0, "31033": 0, "32530": 0, "33087": 0, "32000": 0, "31510": 0, "74451": 0, "74465": 0, "74313": 0, "73503": 0, "74803": 0, "73000": 0, "74446": 0, "74005": 0, "74237": 0, "73822": 0, "73253": 0, "81109": 0, "81700": 0, "75352": 0, "81501": 0, "75012": 0, "81911": 0, "83421": 0, "83624": 0, "83631": 0, "83628": 0, "83009": 0, "85734": 0, "85303": 0, "85501": 0, "84139": 0, "76357": 0, "76401": 0, "79791": 0, "77301": 0, "78451": 0, "78215": 0, "79304": 0, "64224": 0, "69424": 0, "66411": 0, "66461": 0, "69300": 0, "65033": 0, "64813": 0, "64827": 0, "68076": 0, "68089": 0, "67116": 0, "67195": 0, "88315": 0, "88415": 0, "88477": 0, "87249": 4.0, "89347": 0, "88493": 0, "88486": 0, "88422": 0, "88421": 0, "88416": 0, "88466": 0, "88438": 0, "88418": 0, "88451": 0, "87245": 4.0, "89403": 0, "88457": 0, "88459": 0, "87244": 0, "88491": 0, "88492": 0, "89351": 0, "88461": 0, "88419": 0, "88601": 0, "89402": 0, "88481": 0, "88403": 0, "88401": 0, "88410": 0, "88517": 0, "89011": 0, "89144": 0, "89007": 0, "89004": 0, "88285": 0, "89315": 0, "89331": 0, "89326": 0, "89363": 0, "89375": 0, "86451": 0, "86424": 0, "86342": 0, "87980": 0, "88103": 0, "87640": 0, "87941": 0, "87938": 0, "87939": 0, "88221": 0, "87603": 25.0, "87701": 0, "87687": 0, "87681": 0, "87627": 0, "87685": 0, "87643": 25.0, "87751": 0, "87801": 0, "87631": 0, "87671": 0, "87708": 0, "87635": 0, "87663": 0, "87222": 0, "87651": 0, "87679": 0, "87911": 0, "87633": 0, "87621": 0, "88254": 0, "87722": 0, "87971": 0, "87759": 0, "87973": 0, "87967": 0, "87920": 0, "86074": 0, "86066": 0, "86042": 0, "86045": 0, "86295": 0, "86341": 0, "86313": 0, "86311": 0, "86310": 0, "87021": 0, "87026": 0, "87149": 0, "87144": 0, "87069": 0, "87121": 0, "87158": 0, "87181": 0, "87169": 0, "87163": 0, "87271": 0, "87135": 0, "87171": 0, "87159": 0, "87131": 0, "87119": 0, "87153": 0, "86005": 0, "87261": 0, "87302": 0, "87304": 0, "86003": 0, "87219": 0, "87214": 0, "87139": 0, "87152": 0, "87133": 0, "87303": 0, "87134": 0, "87126": 0, "87031": 0, "87057": 0, "87052": 0, "87062": 0, "87016": 0, "87059": 0, "87301": 0, "87066": 0, "86122": 0, "87103": 0, "87117": 0, "87107": 0, "87114": 0, "87104": 0, "86023": 0, "86031": 0, "86041": 0, "87101": 0, "87004": 0, "82241": 0, "83431": 0, "82332": 0, "86921": 0, "86911": 0, "86935": 0, "86901": 0, "86087": 0, "86091": 0, "86241": 0, "86083": 0, "86520": 0, "86964": 0, "86981": 0, "54293": 0, "53307": 0, "54001": 0, "53501": 0, "53241": 0, "53221": 0, "53223": 0, "45201": 0, "54238": 0, "54311": 0, "45106": 67.0, "45008": 0, "53401": 0, "44038": 0, "44101": 0, "23421": 0, "44421": 0, "44304": 0, "23491": 0, "27263": 0, "25316": 0, "24108": 0, "25701": 0, "24385": 0, "47412": 0, "50204": 0, "51722": 0, "51720": 0, "51815": 0, "51918": 0, "51711": 0, "47611": 0, "47344": 0, "50223": 0, "50113": 0, "50211": 0, "50049": 0, "52053": 0, "52736": 0, "50327": 0, "50331": 0, "50405": 0, "50435": 0, "50434": 0, "50334": 0, "50339": 0, "50412": 0, "50333": 0, "50423": 0, "50431": 0, "50321": 0, "50316": 0, "50401": 0, "50328": 0, "50324": 0, "50308": 0, "50417": 0, "52731": 0, "52732": 0, "51949": 0, "52733": 0, "51946": 0, "52741": 0, "52226": 0, "46301": 0, "46306": 0, "47221": 15.0, "46277": 0, "47331": 0, "46252": 0, "50311": 0, "51014": 0, "51311": 0, "51301": 0, "51013": 0, "51016": 0, "51347": 0, "51007": 0, "51351": 0, "51011": 0, "52711": 0, "51531": 0, "51019": 0, "14031": 0, "12931": 0, "13702": 0, "12106": 0, "12001": 0, "15866": 0, "15449": 0, "14261": 0, "19031": 0, "16232": 0, "16201": 0, "16102": 0, "16416": 3.0, "18641": 0, "17019": 0, "18464": 0, "18474": 0, "17011": 0, "17132": 60.0, "17038": 0, "18067": 0, "3110": 0, "7222": 0, "36091": 0, "7575": 0, "52249": 0}, "19:50": {"51353": 0, "66409": 0, "69202": 0, "70100": 0, "70030": 0, "65630": 0, "69215": 0, "65043": 0, "42140": 0, "43314": 0, "43211": 0, "69001": 0, "70306": 0, "70319": 0, "70321": 0, "70261": 0, "70421": 0, "71011": 0, "70411": 0, "72007": 0, "72017": 0, "71040": 0, "72311": 0, "72021": 0, "72410": 0, "63021": 0, "62203": 0, "62400": 0, "63630": 0, "57009": 0, "57403": 0, "55247": 0, "55120": 0, "61009": 0, "55118": 0, "59301": 0, "59002": 0, "59133": 0, "57604": 0, "61100": 0, "59241": 0, "11271": 0, "9161": 0, "36027": 0, "None": 0, "35437": 0, "37005": 0, "37003": 0, "36080": 0, "38183": 0, "36151": 0, "36029": 0, "37001": 0, "36501": 0, "37129": 0, "35136": 0, "35531": 0, "40320": 0, "40036": 0, "40050": 0, "29057": 0, "31620": 0, "11720": 0, "29150": 0, "30021": 0, "30033": 0, "30120": 0, "32583": 0, "32534": 0, "32568": 0, "31521": 0, "35146": 0, "37225": 0, "32554": 0, "32571": 0, "32255": 0, "31033": 0, "32530": 0, "33087": 0, "32000": 0, "31510": 0, "74451": 0, "74465": 0, "74313": 0, "73503": 0, "74803": 0, "73000": 0, "74446": 0, "74005": 0, "74237": 0, "73822": 0, "73253": 0, "81109": 0, "81700": 0, "75352": 0, "81501": 0, "75012": 0, "81911": 0, "83421": 0, "83624": 0, "83631": 0, "83628": 0, "83009": 0, "85734": 0, "85303": 0, "85501": 0, "84139": 0, "76357": 0, "76401": 0, "79791": 0, "77301": 0, "78451": 0, "78215": 0, "79304": 0, "64224": 0, "69424": 0, "66411": 0, "66461": 0, "69300": 0, "65033": 0, "64813": 0, "64827": 0, "68076": 0, "68089": 0, "67116": 0, "67195": 0, "88315": 0, "88415": 0, "88477": 0, "87249": 0, "89347": 0, "88493": 0, "88486": 0, "88422": 0, "88421": 0, "88416": 0, "88466": 0, "88438": 0, "88418": 0, "88451": 0, "87245": 23.0, "89403": 0, "88457": 0, "88459": 0, "87244": 0, "88491": 0, "88492": 0, "89351": 0, "88461": 0, "88419": 0, "88601": 0, "89402": 0, "88481": 0, "88403": 0, "88401": 0, "88410": 0, "88517": 0, "89011": 0, "89144": 0, "89007": 0, "89004": 0, "88285": 0, "89315": 0, "89331": 0, "89326": 0, "89363": 0, "89375": 0, "86451": 0, "86424": 0, "86342": 0, "87980": 0, "88103": 0, "87640": 0, "87941": 0, "87938": 0, "87939": 0, "88221": 0, "87603": 61.0, "87701": 0, "87687": 0, "87681": 0, "87627": 0, "87685": 0, "87643": 61.0, "87751": 0, "87801": 0, "87631": 0, "87671": 0, "87708": 0, "87635": 0, "87663": 0, "87222": 0, "87651": 0, "87679": 0, "87911": 0, "87633": 0, "87621": 0, "88254": 0, "87722": 0, "87971": 0, "87759": 0, "87973": 0, "87967": 0, "87920": 0, "86074": 0, "86066": 0, "86042": 0, "86045": 0, "86295": 0, "86341": 0, "86313": 0, "86311": 0, "86310": 0, "87021": 0, "87026": 0, "87149": 0, "87144": 0, "87069": 0, "87121": 0, "87158": 0, "87181": 0, "87169": 0, "87163": 0, "87271": 0, "87135": 0, "87171": 0, "87159": 0, "87131": 0, "87119": 0, "87153": 0, "86005": 0, "87261": 0, "87302": 0, "87304": 0, "86003": 0, "87219": 0, "87214": 0, "87139": 0, "87152": 0, "87133": 0, "87303": 0, "87134": 0, "87126": 0, "87031": 0, "87057": 0, "87052": 0, "87062": 0, "87016": 0, "87059": 0, "87301": 0, "87066": 0, "86122": 0, "87103": 0, "87117": 0, "87107": 0, "87114": 0, "87104": 0, "86023": 0, "86031": 0, "86041": 0, "87101": 0, "87004": 0, "82241": 0, "83431": 0, "82332": 0, "86921": 0, "86911": 0, "86935": 0, "86901": 0, "86087": 0, "86091": 0, "86241": 0, "86083": 0, "86520": 0, "86964": 0, "86981": 0, "54293": 0, "53307": 0, "54001": 0, "53501": 0, "53241": 0, "53221": 0, "53223": 0, "45201": 0, "54238": 0, "54311": 30.0, "45106": 30.0, "45008": 0, "53401": 0, "44038": 0, "44101": 0, "23421": 0, "44421": 0, "44304": 0, "23491": 0, "27263": 0, "25316": 0, "24108": 0, "25701": 0, "24385": 0, "47412": 0, "50204": 0, "51722": 0, "51720": 0, "51815": 0, "51918": 0, "51711": 0, "47611": 0, "47344": 0, "50223": 0, "50113": 0, "50211": 0, "50049": 0, "52053": 0, "52736": 0, "50327": 0, "50331": 0, "50405": 0, "50435": 0, "50434": 0, "50334": 0, "50339": 0, "50412": 0, "50333": 0, "50423": 0, "50431": 0, "50321": 0, "50316": 0, "50401": 0, "50328": 0, "50324": 0, "50308": 0, "50417": 0, "52731": 0, "52732": 0, "51949": 0, "52733": 0, "51946": 0, "52741": 0, "52226": 0, "46301": 0, "46306": 0, "47221": 90.0, "46277": 0, "47331": 0, "46252": 0, "50311": 0, "51014": 0, "51311": 0, "51301": 0, "51013": 0, "51016": 0, "51347": 0, "51007": 0, "51351": 0, "51011": 0, "52711": 0, "51531": 0, "51019": 0, "14031": 0, "12931": 0, "13702": 0, "12106": 0, "12001": 0, "15866": 0, "15449": 0, "14261": 0, "19031": 0, "16232": 0, "16201": 0, "16102": 0, "16416": 0, "18641": 0, "17019": 0, "18464": 0, "18474": 0, "17011": 0, "17132": 3.0, "17038": 0, "18067": 0, "3110": 0, "7222": 0, "36091": 0, "7575": 0, "52249": 0}};
+        var timeSteps = ["19:00", "19:10", "19:20", "19:30", "19:40", "19:50"];
+        
+        // State
+        var currentIndex = 0;
+        var isPlaying = false;
+        var playInterval;
+        var markers = {};
+        
+        // Color functions for heatmap
+        function getHeatmapColor(delayMinutes) {
+            if (delayMinutes === 0) return '#cccccc';      // Grey for no delays
+            if (delayMinutes >= 60) return '#ff0000';      // Bright red for critical delays (60+ min) - matches legend
+            if (delayMinutes >= 30) return '#ffa500';      // Bright orange for high delays (30-59 min) - matches legend
+            if (delayMinutes >= 15) return '#ffff00';      // Bright yellow for medium delays (15-29 min) - matches legend
+            return '#00ff00';                              // Bright green for minor delays (1-14 min) - matches legend
+        }
+        
+        // Update heatmap for specific time index
+        function updateMap(index) {
+            try {
+                currentIndex = index;
+                var timeKey = timeSteps[index];
+                var delays = timelineData[timeKey] || {};
+                
+                console.log('🕐 Updating heatmap for time:', timeKey, 'with', Object.keys(delays).length, 'stations');
+                
+                // Clear existing station markers
+                Object.values(markers).forEach(m => map.removeLayer(m));
+                markers = {};
+                
+                // Update time display
+                document.getElementById('current-time').textContent = timeKey;
+                
+                // Clear existing delay circles and create new ones with exact colors
+                delayCircles.clearLayers();
+                
+                var stationInfoHtml = '';
+                var totalDelayedStations = 0;
+                var totalSystemDelay = 0;
+                var delayedStations = [];
+                
+                // Create colored delay circles for each affected station
+                Object.entries(stationCoords).forEach(([stationCode, coords]) => {
+                    var delayMinutes = delays[stationCode] || 0;
+                    
+                    // Create colored circles for stations with delays
+                    if (delayMinutes > 0) {
+                        var color = getExactDelayColor(delayMinutes);
+                        var size = getCircleSize(delayMinutes);
+                        
+                        // Debug logging for extreme delays
+                        if (delayMinutes >= 120) {
+                            console.log(`🔥 EXTREME DELAY: Station ${coords.name} has ${delayMinutes} min delay → color ${color} size ${size} (should be bright red)`);
+                        }
+                        
+                        // Create cloud-like colored circle for the delay
+                        var delayCircle = L.circleMarker([coords.lat, coords.lon], {
+                            radius: size,
+                            fillColor: color,
+                            color: color,
+                            weight: 0,               // No border for cleaner cloud effect
+                            opacity: 0.7,            // Slightly transparent for blending
+                            fillOpacity: 0.5,        // More transparent for cloud-like appearance
+                            className: 'delay-circle' // Apply CSS class for blur effects
+                        });
+                        
+                        // Add popup with detailed information
+                        delayCircle.bindPopup(`
+                            <strong>${coords.name}</strong><br>
+                            Station: ${stationCode}<br>
+                            Interval Delay: ${delayMinutes} minutes<br>
+                            Time Window: ${timeKey} (10 min)
+                        `);
+                        
+                        delayCircles.addLayer(delayCircle);
+                    }
+                    
+                    // Create invisible clickable markers only for affected stations (with delays)
+                    if (delayMinutes > 0) {
+                        var marker = L.circleMarker([coords.lat, coords.lon], {
+                            radius: 8,               // Larger invisible area for easier clicking
+                            fillColor: 'transparent', // Invisible fill
+                            color: 'transparent',     // Invisible border
+                            weight: 0,               // No border
+                            opacity: 0,              // Completely invisible
+                            fillOpacity: 0           // Completely invisible
+                        });
+                        
+                        // Add popup with station information
+                        var popupContent = `
+                            <strong>${coords.name}</strong><br>
+                            Station: ${stationCode}<br>
+                            Interval Delay: ${delayMinutes} minutes<br>
+                            Time Window: ${timeKey} - ${timeKey} (10 min)
+                        `;
+                        
+                        marker.bindPopup(popupContent);
+                        marker.addTo(map);
+                        markers[stationCode] = marker;
+                    }
+                    
+                    // Collect statistics for affected stations
+                    if (delayMinutes > 0) {
+                        totalDelayedStations++;
+                        totalSystemDelay += delayMinutes;
+                        
+                        var delayClass = delayMinutes >= 60 ? 'delay-extreme' : 
+                                       delayMinutes >= 30 ? 'delay-high' : 
+                                       delayMinutes >= 15 ? 'delay-med' : 'delay-low';
+                        
+                        delayedStations.push({
+                            name: coords.name.substring(0,15),
+                            delay: delayMinutes,
+                            class: delayClass
+                        });
+                    }
+                });
+                
+                // Sort delayed stations by delay amount (highest first)
+                delayedStations.sort((a, b) => b.delay - a.delay);
+                
+                // Update station info panel
+                if (totalDelayedStations > 0) {
+                    var avgDelay = (totalSystemDelay / totalDelayedStations).toFixed(1);
+                    stationInfoHtml = `<strong>Network Impact:</strong> ${totalDelayedStations} stations affected, ${totalSystemDelay} total minutes in this 10-min interval (avg: ${avgDelay}min)<br><br>`;
+                    
+                    // Show top affected stations
+                    var topStations = delayedStations.slice(0, 10); // Show top 10
+                    topStations.forEach(station => {
+                        stationInfoHtml += `<span class="station-delay ${station.class}">${station.name}: ${station.delay}min</span>`;
+                    });
+                    
+                    if (delayedStations.length > 10) {
+                        stationInfoHtml += `<span style="margin-left: 10px; font-style: italic;">...and ${delayedStations.length - 10} more</span>`;
+                    }
+                } else {
+                    stationInfoHtml = `<strong>Network Status:</strong> No delays detected in this interval. ${Object.keys(stationCoords).length} stations (A/B/C1/C2 categories) monitored.`;
+                }
+                
+                document.getElementById('station-info').innerHTML = stationInfoHtml;
+                
+            } catch (error) {
+                console.error('❌ Error updating heatmap:', error);
+                document.getElementById('station-info').innerHTML = 'Error updating heatmap: ' + error.message;
+            }
+        }
+        
+        // Timeline controls (same as incident_view_html)
+        document.getElementById('timeline').addEventListener('input', function(e) {
+            pauseTimeline();
+            updateMap(parseInt(e.target.value));
+        });
+        
+        function playTimeline() {
+            if (!isPlaying) {
+                isPlaying = true;
+                playInterval = setInterval(() => {
+                    if (currentIndex < timeSteps.length - 1) {
+                        currentIndex++;
+                        document.getElementById('timeline').value = currentIndex;
+                        updateMap(currentIndex);
+                    } else {
+                        pauseTimeline();
+                    }
+                }, 1500);  // Slightly slower for heatmap viewing
+            }
+        }
+        
+        function pauseTimeline() {
+            isPlaying = false;
+            if (playInterval) clearInterval(playInterval);
+        }
+        
+        function resetTimeline() {
+            pauseTimeline();
+            currentIndex = 0;
+            document.getElementById('timeline').value = 0;
+            updateMap(0);
+        }
+        
+        // Initialize heatmap with better error handling
+        function initializeHeatmap() {
+            console.log('🌡️ Starting heatmap initialization...');
+            console.log('Leaflet available:', typeof L !== 'undefined');
+            console.log('Leaflet.heat available:', typeof L.heatLayer !== 'undefined');
+            console.log('Station coordinates loaded:', Object.keys(stationCoords).length);
+            console.log('Time steps:', timeSteps.length);
+            console.log('Timeline data:', Object.keys(timelineData).length);
+            
+            if (typeof L === 'undefined') {
+                console.error('❌ Leaflet not loaded!');
+                document.getElementById('station-info').innerHTML = 'Error: Leaflet library not loaded';
+                return;
+            }
+            
+            if (typeof L.heatLayer === 'undefined') {
+                console.error('❌ Leaflet.heat plugin not loaded!');
+                document.getElementById('station-info').innerHTML = 'Error: Leaflet.heat plugin not loaded';
+                return;
+            }
+            
+            if (timeSteps.length === 0) {
+                console.error('❌ No time steps available!');
+                document.getElementById('station-info').innerHTML = 'No time data available';
+            } else if (Object.keys(stationCoords).length === 0) {
+                console.error('❌ No station coordinates available!');
+                document.getElementById('station-info').innerHTML = 'No station coordinates available';
+            } else {
+                console.log('✅ All data loaded successfully, initializing heatmap...');
+                updateMap(0);
+            }
+            
+            // Add incident location markers
+            
+            var incidentMarker0 = L.marker([51.95296135, -0.262518185], {
+                icon: L.divIcon({
+                    html: '<div style="font-size: 24px; color: red; font-weight: bold;">✕</div>',
+                    className: 'incident-marker',
+                    iconSize: [30, 30],
+                    iconAnchor: [15, 15]
+                })
+            }).addTo(map);
+            
+            incidentMarker0.bindPopup(`
+                <strong>Incident Location</strong><br>
+                Station: Hitchin<br>  
+                STANOX: 53221<br>
+                Incident: 705009<br>
+                Section: 53221<br>
+                Reason: I1<br>
+                Started: 09-AUG-2024 18:41
+            `);
+            
+            console.log('🎬 Heatmap initialization complete!');
+        }
+        
+        // Wait for all scripts to load before initializing
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initializeHeatmap);
+        } else {
+            // DOM is already loaded, but wait a bit for scripts
+            setTimeout(initializeHeatmap, 100);
+        }
+    </script>
+</body>
+</html>
