@@ -1,6 +1,5 @@
 This repository stores projects related to the MSci in Research program. It will contain shared files with the professor supervising my project, Dr. Ji-Eun Byun, to promote collaboration between our ends and combine our efforts.
 All files are considered as input in their form of download. The sources of these downloads are:
-FILL IN WITH ALL DATA SOURCES AND THEIR RESPECTIVE DATA
 
 ## Data Setup
 
