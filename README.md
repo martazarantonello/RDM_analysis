@@ -21,6 +21,10 @@ To use this tool, you need to download the NWR Historic Delay Attribution data f
    - `CIF_ALL_FULL_DAILY_toc-full.json.gz`
 3. The tool will automatically detect and load these files from the `data/` folder.
 4. Please refer to the `reference/` and `track lines/` folders for the only directly provided files.
+5. IMPORTANT! Here, the schedule file needs to be cleaned before it is pre-processed. To do so, please:
+ - Run the schedule_cleaning.py file, where the function clean_schedule is      present.
+ - This will create the CIF_ALL_FULL_DAILY_toc-full_p4.pkl file
+ - This is the cleaned version of the downloaded schedule file in .json.gz format. The schedule.py file already contains the correct code for this cleaned file to be called properly in the following sections.
 
 ## Data Pre-Processing
 
