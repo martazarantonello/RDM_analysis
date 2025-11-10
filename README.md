@@ -21,3 +21,38 @@ To use this tool, you need to download the NWR Historic Delay Attribution data f
    - `CIF_ALL_FULL_DAILY_toc-full.json.gz`
 3. The tool will automatically detect and load these files from the `data/` folder.
 4. Please refer to the `reference/` and `track lines/` folders for the only directly provided files.
+
+## Data Pre-Processing
+
+After you have downloaded this data and saved it to the `data/` folder, you need to perform some pre-processing. This is a crucial step in this analysis as you want to match the scheduled trains with delays and passenger loadings. The script rocesses schedule data, applies delays, and saves the results as pandas DataFrames organized by day of the week for each station. To pre-process the data, you need to run:
+
+> python -m preprocessor.main
+
+This can be run with different specifications for the user's needs. Below are defined all its possible usages:
+
+1. To process All categories: python -m preprocessor.main --all-categories
+2. To process a single station: python -m preprocessor.main <STANOX_CODE>
+3. To process Category A stations only : python -m preprocessor.main --category-A
+4. To process Category B stations only: python -m preprocessor.main --category-B
+5. To process Category C1 stations only: python -m preprocessor.main --category-C1
+6. To process Category C2 stations only: python -m preprocessor.main --category-C2
+
+This script saves processed schedule and delay data to parquet files for railway stations by DFT category in a `processed_data/` folder.
+
+## Tool Demos and Outputs
+
+After you have downloaded and saved the raw data, and pre-processed it using the preprocessor tool, you can make use of the demos for the actual network analysis. To do so, you need to load the data you have just pre-processed. In the `outputs/` folder you can find two files:
+
+- load_data.py
+- utils.py
+
+The load_data.py is a script that defines the function load_processed_data which is called at the start of every demo in the `demos/` folder. In the same way, the utils.py is a script that contains all needed functions that make the demos for this analysis possible. These functions will also be called at the beginning of every demo, according to their respective usage. 
+In the `demos/` folder, you can find all 5 demos defined by this analysis. These demos are:
+
+1. Aggregate View
+2. Incident View
+3. Time View
+4. Train View
+5. Station View
+
+Each demo is concerned with a different aspect of network analysis and granularity of inspection.
