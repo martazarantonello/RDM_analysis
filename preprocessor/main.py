@@ -1,12 +1,13 @@
 
+# THIS IS NOT A FINAL VERSION OF THE SCRIPT.
+# THIS FILE NEEDS TO BE FULLY OPTIMIZED FOR BATCH PROCESSING OF STATIONS BY CATEGORY.
+
+
 """
 Save processed schedule and delay data to parquet files for railway stations by DFT category.
 This script can process any DFT category (A, B, C1, C2) or all categories at once.
 Processes schedule data, applies delays, and saves the results as pandas DataFrames
 organized by day of the week for each station.
-
-FULLY OPTIMIZED: Batch processing loads data once and reuses it for all stations,
-eliminating redundant file I/O operations for massive performance gains.
 
 Usage:
 - Single station: python -m preprocessor.main <STANOX_CODE>
