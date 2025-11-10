@@ -232,6 +232,10 @@ def aggregate_view(incident_number, date):
             ax1.text(dt, val + max_val * 0.01, f'{val:.0f}', 
                     ha='center', va='bottom', fontsize=20, fontweight='bold')
     
+    # Extend y-axis to prevent labels from spilling outside (add 10% extra space at top)
+    current_ylim = ax1.get_ylim()
+    ax1.set_ylim(current_ylim[0], current_ylim[1] * 1.10)
+    
     # Add INCIDENT_START_DATETIME markers
     if 'start_chart_datetime' in df.columns:
         incident_start_times = df[df['start_chart_datetime'].notna()]['start_chart_datetime'].unique()
@@ -280,8 +284,9 @@ def aggregate_view(incident_number, date):
         # Add total delay info
         total_events = len(delay_data)
         avg_delay = delay_values.mean()
-        ax2.text(0.02, 0.98, f'Total Events: {total_events}\nAverage Delay: {avg_delay:.1f} min', 
-                transform=ax2.transAxes, verticalalignment='top', fontsize=20,
+        # Position text box in upper right corner to avoid overlapping with bars
+        ax2.text(0.98, 0.98, f'Total Events: {total_events}\nAverage Delay: {avg_delay:.1f} min', 
+                transform=ax2.transAxes, verticalalignment='top', horizontalalignment='right', fontsize=20,
                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
     else:
         ax2.text(0.5, 0.5, 'No delay events found', transform=ax2.transAxes, 
@@ -638,1238 +643,6 @@ def incident_view(incident_code, incident_date, analysis_date, analysis_hhmm, pe
     
     # Return results, incident start time, and analysis period description
     return result_df, incident_start_time, analysis_period_str
-
-
-# for incident view but html:
-
-def incident_view_html(incident_code, incident_date, analysis_date, analysis_hhmm, period_minutes, interval_minutes=10, output_file=None):
-    """
-    Create a dynamic interactive HTML map showing PERIOD-SPECIFIC delay minutes over time
-    for a specific incident analysis period on a geographic map with timeline controls.
-    
-    The analysis period is split into intervals, and each interval shows the total delay
-    minutes for that specific interval (NOT cumulative). Delays can go up or down between intervals.
-    
-    Parameters:
-    incident_code (int/float): The incident number to analyze
-    incident_date (str): Date when incident started in 'DD-MMM-YYYY' format
-    analysis_date (str): Specific date to analyze in 'DD-MMM-YYYY' format
-    analysis_hhmm (str): Start time for analysis in 'HHMM' format (e.g., '1900')
-    period_minutes (int): Total duration of analysis period in minutes
-    interval_minutes (int): Duration of each interval in minutes (default: 10)
-    output_file (str): Optional HTML file path to save
-    
-    Returns:
-    str: HTML content of the interactive map
-    """
-    
-    # Load station coordinates data from comprehensive JSON file
-    try:
-        from data.reference import reference_files
-        import json
-        
-        file_path = reference_files["all dft categories"]
-        print(f"Attempting to load station coordinates from: {file_path}")
-        
-        if not os.path.exists(file_path):
-            print(f"File does not exist: {file_path}")
-            print("Available reference files:", list(reference_files.keys()))
-            return None
-            
-        with open(file_path, 'r') as f:
-            stations_coords_data = json.load(f)
-            
-        print(f"Successfully loaded {len(stations_coords_data)} station records")
-        
-    except KeyError as e:
-        print(f"Reference file key not found: {e}")
-        print("Available reference files:", list(reference_files.keys()))
-        return None
-    except FileNotFoundError:
-        print("Station coordinates file not available. Cannot create map.")
-        return None
-    except Exception as e:
-        print(f"Error loading station coordinates: {e}")
-        return None
-    
-    # Parse analysis parameters
-    try:
-        analysis_datetime = datetime.strptime(f"{analysis_date} {analysis_hhmm[:2]}:{analysis_hhmm[2:]}", '%d-%b-%Y %H:%M')
-    except ValueError:
-        print(f"Error: Invalid analysis date/time format.")
-        return None
-    
-    analysis_end = analysis_datetime + timedelta(minutes=period_minutes)
-    
-    print(f"Creating dynamic HTML map for incident {incident_code}")
-    print(f"Analysis period: {analysis_datetime.strftime('%d-%b-%Y %H:%M')} to {analysis_end.strftime('%d-%b-%Y %H:%M')}")
-    print(f"Interval size: {interval_minutes} minutes")
-    
-    # Calculate number of intervals
-    num_intervals = period_minutes // interval_minutes
-    if period_minutes % interval_minutes != 0:
-        num_intervals += 1  # Include partial interval at the end
-    
-    print(f"Total intervals: {num_intervals}")
-    
-    # Determine day of week for analysis date
-    day_mapping = {0: 'MO', 1: 'TU', 2: 'WE', 3: 'TH', 4: 'FR', 5: 'SA', 6: 'SU'}
-    analysis_day_suffix = day_mapping[analysis_datetime.weekday()]
-    
-    # Load station files for the analysis day using NEW parquet structure
-    processed_base = find_processed_data_path()
-    
-    if processed_base is None:
-        print("No processed_data directory found in any expected location. Please run the preprocessor first.")
-        return None
-    
-    # Get all station directories
-    station_dirs = [d for d in os.listdir(processed_base) 
-                   if os.path.isdir(os.path.join(processed_base, d))]
-    
-    # Build list of files to load (only for the specific day)
-    target_files = []
-    for station_dir in station_dirs:
-        station_path = os.path.join(processed_base, station_dir)
-        day_file = os.path.join(station_path, f"{analysis_day_suffix}.parquet")
-        if os.path.exists(day_file):
-            target_files.append((day_file, station_dir))
-    
-    print(f"Loading {len(target_files)} station files for {analysis_day_suffix}")
-    
-    # Create station coordinates mapping from JSON data
-    station_coords_map = {}
-    for station in stations_coords_data:
-        if isinstance(station, dict):
-            station_id = str(station.get('stanox', ''))
-            latitude = station.get('latitude')
-            longitude = station.get('longitude')
-            description = station.get('description', 'Unknown Station')
-            
-            # Check if coordinates are valid (coordinates may be strings that can be converted to float)
-            if (station_id and 
-                latitude is not None and longitude is not None and
-                str(latitude).replace('.', '').replace('-', '').isdigit() and 
-                str(longitude).replace('.', '').replace('-', '').isdigit()):
-                try:
-                    station_coords_map[station_id] = {
-                        'name': description,
-                        'lat': float(latitude),
-                        'lon': float(longitude)
-                    }
-                except ValueError:
-                    # Skip station if coordinate conversion fails
-                    continue
-    
-    print(f"Found coordinates for {len(station_coords_map)} stations")
-    
-    # Collect delay timeline data for all stations
-    station_timeline_data = {}  # {station_code: [(datetime, cumulative_delay_minutes)]}
-    incident_section_code = None
-    incident_reason = None
-    incident_start_time = None
-    
-    # Debug: show first few station codes we're looking for
-    debug_station_codes = [station_code for _, station_code in target_files[:5]]
-    print(f"Sample station codes from processed data: {debug_station_codes}")
-    debug_coord_keys = list(station_coords_map.keys())[:5]
-    print(f"Sample station IDs from coordinates: {debug_coord_keys}")
-    
-    for file_path, station_code in target_files:
-        if station_code not in station_coords_map:
-            continue  # Skip stations without coordinates
-            
-        try:
-            # Use fastparquet engine to read the file
-            df = pd.read_parquet(file_path, engine='fastparquet')
-            if not isinstance(df, pd.DataFrame):
-                continue
-                
-            # Get all incident data for this station
-            all_incident_data = df[df['INCIDENT_NUMBER'] == incident_code].copy()
-            if all_incident_data.empty:
-                continue
-            
-            # Extract incident information on first occurrence
-            if incident_section_code is None and not all_incident_data.empty:
-                # Get incident details from the first record that matches the incident date
-                incident_records = all_incident_data[all_incident_data['INCIDENT_START_DATETIME'].str.contains(incident_date, na=False)]
-                if not incident_records.empty:
-                    incident_section_code = incident_records['SECTION_CODE'].iloc[0]
-                    incident_reason = incident_records['INCIDENT_REASON'].iloc[0]
-                    incident_start_time = incident_records['INCIDENT_START_DATETIME'].iloc[0]
-            
-            # Filter to events within our analysis period
-            all_incident_data['EVENT_DATETIME_parsed'] = pd.to_datetime(all_incident_data['EVENT_DATETIME'], format='%d-%b-%Y %H:%M', errors='coerce')
-            all_incident_data = all_incident_data[all_incident_data['EVENT_DATETIME_parsed'].notna()].copy()
-            
-            # Filter to analysis period
-            period_data = all_incident_data[
-                (all_incident_data['EVENT_DATETIME_parsed'] >= analysis_datetime) &
-                (all_incident_data['EVENT_DATETIME_parsed'] <= analysis_end) &
-                (all_incident_data['PFPI_MINUTES'].notna())
-            ].copy()
-            
-            if period_data.empty:
-                continue
-            
-            # Create timeline of INTERVAL-SPECIFIC delays for this station (NOT cumulative)
-            # Group delays by the specified interval_minutes
-            interval_delays = {}  # {interval_start_time: total_delay_for_interval}
-            
-            for _, row in period_data.iterrows():
-                event_time = row['EVENT_DATETIME_parsed']
-                delay = row['PFPI_MINUTES']
-                
-                # Calculate which interval this event belongs to
-                minutes_from_start = int((event_time - analysis_datetime).total_seconds() / 60)
-                interval_number = minutes_from_start // interval_minutes
-                
-                # Calculate the start time of this interval
-                interval_start = analysis_datetime + timedelta(minutes=interval_number * interval_minutes)
-                
-                if interval_start not in interval_delays:
-                    interval_delays[interval_start] = 0
-                interval_delays[interval_start] += delay
-            
-            # Convert to timeline format - each timestamp shows total delays for that interval
-            timeline = []
-            for interval_start in sorted(interval_delays.keys()):
-                interval_total_delay = interval_delays[interval_start]
-                timeline.append((interval_start, interval_total_delay))
-            
-            if timeline:
-                station_timeline_data[station_code] = timeline
-                
-        except Exception as e:
-            continue
-    
-    if not station_timeline_data:
-        print("No delay data found for the analysis period")
-        return None
-    
-    print(f"Found delay data for {len(station_timeline_data)} stations")
-    
-    # Get incident location coordinates
-    incident_lat = 54.5  # Default to center of UK
-    incident_lon = -2.0
-    incident_station_name = None
-    
-    if incident_section_code:
-        try:
-            # Load station codes reference file
-            from data.reference import reference_files
-            import json  # Ensure json is available in this scope
-            with open(reference_files["station codes"], 'r') as f:
-                station_codes_data = json.load(f)
-            
-            # Find station matching the section code
-            for record in station_codes_data:
-                if isinstance(record, dict) and str(record.get('stanox')) == str(incident_section_code):
-                    if record.get('latitude') and record.get('longitude'):
-                        incident_lat = float(record['latitude'])
-                        incident_lon = float(record['longitude'])
-                        incident_station_name = record.get('description')
-                        print(f"Found incident location: {incident_station_name} ({incident_lat}, {incident_lon})")
-                        break
-        except Exception as e:
-            print(f"Warning: Could not load incident location coordinates: {e}")
-    
-    # Create time steps for animation using the specified interval
-    time_steps = []
-    current_time = analysis_datetime
-    while current_time < analysis_end:
-        time_steps.append(current_time)
-        current_time += timedelta(minutes=interval_minutes)
-    
-    # Build timeline data structure for JavaScript
-    timeline_data = {}
-    for step_time in time_steps:
-        time_key = step_time.strftime('%H:%M')
-        timeline_data[time_key] = {}
-        
-        # For each station, find the SPECIFIC delay for this exact interval (NOT cumulative)
-        for station_code, station_timeline in station_timeline_data.items():
-            interval_delay = 0
-            # Find delays that occurred exactly in this interval
-            for event_time, delay_amount in station_timeline:
-                # Check if this event happened in this specific interval window
-                time_window_start = step_time
-                time_window_end = step_time + timedelta(minutes=interval_minutes)
-                
-                if time_window_start <= event_time < time_window_end:
-                    interval_delay += delay_amount
-            
-            # Only include if there are delays in this specific interval
-            if interval_delay > 0:
-                timeline_data[time_key][station_code] = interval_delay
-    
-    # Prepare data for JavaScript
-    import json
-    station_coords_json = json.dumps(station_coords_map)
-    timeline_data_json = json.dumps(timeline_data)
-    time_steps_json = json.dumps([t.strftime('%H:%M') for t in time_steps])
-    
-    # Create HTML content
-    html_content = f'''<!DOCTYPE html>
-<html>
-<head>
-    <title>Incident {incident_code} - Period-Specific Delay Analysis</title>
-    <meta charset="utf-8" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
-    <style>
-        body {{ margin: 0; font-family: Arial, sans-serif; background: #f5f5f5; }}
-        #map {{ height: 75vh; }}
-        #controls {{ 
-            height: 25vh; 
-            padding: 20px; 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }}
-        .control-panel {{ 
-            background: rgba(255,255,255,0.95); 
-            padding: 15px; 
-            margin: 10px 0; 
-            border-radius: 10px; 
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-            color: #333;
-        }}
-        #timeline {{ width: 100%; margin: 10px 0; height: 8px; }}
-        .time-display {{ 
-            font-size: 24px; 
-            font-weight: bold; 
-            text-align: center; 
-            color: #2c3e50;
-            margin: 10px 0;
-        }}
-        .play-controls {{ text-align: center; margin: 15px 0; }}
-        .btn {{ 
-            background: #3498db; 
-            color: white; 
-            border: none; 
-            padding: 10px 20px; 
-            margin: 0 5px; 
-            border-radius: 25px; 
-            cursor: pointer; 
-            font-size: 16px;
-            transition: all 0.3s ease;
-        }}
-        .btn:hover {{ background: #2980b9; transform: translateY(-2px); }}
-        .btn:active {{ transform: translateY(0); }}
-        #station-info {{ 
-            max-height: 120px; 
-            overflow-y: auto; 
-            margin-top: 10px;
-            font-size: 14px;
-        }}
-        .station-delay {{ 
-            display: inline-block; 
-            margin: 2px 5px; 
-            padding: 3px 8px; 
-            border-radius: 15px; 
-            font-size: 12px;
-        }}
-        .delay-low {{ background: #2ecc71; color: white; }}
-        .delay-med {{ background: #f39c12; color: white; }}
-        .delay-high {{ background: #e74c3c; color: white; }}
-        .delay-extreme {{ background: #8e44ad; color: white; }}
-        .legend {{ 
-            background: rgba(255,255,255,0.95); 
-            padding: 10px; 
-            border-radius: 8px;
-            margin: 10px 0;
-            font-size: 12px;
-            color: #333;
-        }}
-        .legend-item {{ 
-            display: inline-block;
-            margin: 3px 8px 3px 0; 
-        }}
-        .legend-color {{ 
-            display: inline-block; 
-            width: 15px; 
-            height: 15px; 
-            border-radius: 50%; 
-            margin-right: 5px; 
-            vertical-align: middle;
-        }}
-    </style>
-</head>
-<body>
-    <!-- Map Container -->
-    <div id="map">
-    </div>
-    
-    <!-- Controls Container -->
-    <div id="controls">
-        <div class="control-panel">
-            <h3 style="margin-top: 0;">Incident {incident_code} - {analysis_date}</h3>
-            <p style="margin: 5px 0;">Analysis Period: {analysis_datetime.strftime('%H:%M')} - {analysis_end.strftime('%H:%M')} ({period_minutes} min total, {interval_minutes}-min intervals)</p>
-            <p style="margin: 5px 0; font-weight: bold;">Section: {incident_section_code or 'N/A'}{' (' + incident_station_name + ')' if incident_station_name else ''} | Reason: {incident_reason or 'N/A'} | Started: {incident_start_time or 'N/A'}</p>
-            
-            <div class="time-display" id="current-time">{time_steps[0].strftime('%H:%M')}</div>
-            
-            <input type="range" id="timeline" min="0" max="{len(time_steps)-1}" value="0" step="1">
-            
-            <div class="play-controls">
-                <button class="btn" onclick="playTimeline()">▶ Play</button>
-                <button class="btn" onclick="pauseTimeline()">⏸ Pause</button>
-                <button class="btn" onclick="resetTimeline()">⏮ Reset</button>
-            </div>
-            
-            <div class="legend">
-                <strong>Interval Delay Minutes:</strong>
-                <div class="legend-item"><span class="legend-color" style="background: #2ecc71;"></span>1-15 min</div>
-                <div class="legend-item"><span class="legend-color" style="background: #f39c12;"></span>16-45 min</div>
-                <div class="legend-item"><span class="legend-color" style="background: #e74c3c;"></span>46-90 min</div>
-                <div class="legend-item"><span class="legend-color" style="background: #8e44ad;"></span>90+ min</div>
-            </div>
-            
-            <div id="station-info">No delays at this time</div>
-        </div>
-    </div>
-
-    <script>
-        // Initialize map
-        var map = L.map('map').setView([54.5, -2.0], 6);
-        L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-            attribution: '© OpenStreetMap contributors'
-        }}).addTo(map);
-        
-        // Add incident location marker at actual coordinates
-        var incidentMarker = L.marker([{incident_lat}, {incident_lon}], {{
-            icon: L.divIcon({{
-                html: '<div style="font-size: 24px; color: red; font-weight: bold;">✕</div>',
-                className: 'incident-marker',
-                iconSize: [30, 30],
-                iconAnchor: [15, 15]
-            }})
-        }}).addTo(map);
-        
-        incidentMarker.bindPopup(`
-            <strong>Incident Location</strong><br>
-            Station: {incident_station_name or 'Unknown'}<br>
-            Incident: {incident_code}<br>
-            Section: {incident_section_code or 'N/A'}<br>
-            Reason: {incident_reason or 'N/A'}<br>
-            Started: {incident_start_time or 'N/A'}<br>
-            <em>Coordinates: {incident_lat:.4f}, {incident_lon:.4f}</em>
-        `);
-        
-        // Data
-        var stationCoords = {station_coords_json};
-        var timelineData = {timeline_data_json};
-        var timeSteps = {time_steps_json};
-        
-        // State
-        var currentIndex = 0;
-        var isPlaying = false;
-        var playInterval;
-        var markers = {{}};
-        
-        // Color functions
-        function getDelayColor(delayMinutes) {{
-            if (delayMinutes >= 90) return '#8e44ad';      // Purple for extreme delays
-            if (delayMinutes >= 46) return '#e74c3c';      // Red for high delays
-            if (delayMinutes >= 16) return '#f39c12';      // Orange for medium delays
-            return '#2ecc71';                              // Green for low delays
-        }}
-        
-        // Update map for specific time index
-        function updateMap(index) {{
-            try {{
-                currentIndex = index;
-                var timeKey = timeSteps[index];
-                var delays = timelineData[timeKey] || {{}};
-                
-                console.log('🕐 Updating map for time:', timeKey, 'with', Object.keys(delays).length, 'stations');
-                
-                // Clear existing markers
-                Object.values(markers).forEach(m => map.removeLayer(m));
-                markers = {{}};
-                
-                // Update time display
-                document.getElementById('current-time').textContent = timeKey;
-            
-            // Create markers for stations with delays
-            var stationInfoHtml = '';
-            var totalSystemDelay = 0;
-            var stationCount = 0;
-            
-            Object.entries(delays).forEach(([stationCode, delayMinutes]) => {{
-                if (stationCoords[stationCode] && delayMinutes > 0) {{
-                    var coords = stationCoords[stationCode];
-                    
-                    // Create circle marker (same size, different colors)
-                    var marker = L.circleMarker([coords.lat, coords.lon], {{
-                        radius: 8,  // Fixed size
-                        fillColor: getDelayColor(delayMinutes),
-                        color: '#000',
-                        weight: 2,
-                        opacity: 1,
-                        fillOpacity: 0.8
-                    }});
-                    
-                    // Calculate end time for 5-minute window
-                    var timeparts = timeKey.split(':');
-                    var hours = parseInt(timeparts[0]);
-                    var minutes = parseInt(timeparts[1]);
-                    var endMinutes = (minutes + 5) % 60;
-                    var endHours = hours + Math.floor((minutes + 5) / 60);
-                    var endTime = endHours.toString().padStart(2, '0') + ':' + endMinutes.toString().padStart(2, '0');
-                    
-                    // Calculate end time for interval window
-                    var timeparts = timeKey.split(':');
-                    var hours = parseInt(timeparts[0]);
-                    var minutes = parseInt(timeparts[1]);
-                    var endMinutes = (minutes + {interval_minutes}) % 60;
-                    var endHours = hours + Math.floor((minutes + {interval_minutes}) / 60);
-                    var endTime = endHours.toString().padStart(2, '0') + ':' + endMinutes.toString().padStart(2, '0');
-                    
-                    marker.bindPopup(`
-                        <strong>${{coords.name}}</strong><br>
-                        Station: ${{stationCode}}<br>
-                        Interval Delay: ${{delayMinutes}} minutes<br>
-                        Time Window: ${{timeKey}} - ${{endTime}} ({interval_minutes} min)
-                    `);
-                    
-                    marker.addTo(map);
-                    markers[stationCode] = marker;
-                    
-                    // Add to station info
-                    var delayClass = delayMinutes >= 90 ? 'delay-extreme' : 
-                                   delayMinutes >= 46 ? 'delay-high' : 
-                                   delayMinutes >= 16 ? 'delay-med' : 'delay-low';
-                    
-                    stationInfoHtml += `<span class="station-delay ${{delayClass}}">${{coords.name.substring(0,15)}}: ${{delayMinutes}}min</span>`;
-                    
-                    totalSystemDelay += delayMinutes;
-                    stationCount++;
-                }}
-            }});
-            
-            // Update station info panel
-            if (stationInfoHtml) {{
-                var avgDelay = (totalSystemDelay / stationCount).toFixed(1);
-                stationInfoHtml = `<strong>Interval Impact:</strong> ${{stationCount}} stations, ${{totalSystemDelay}} minutes in this {interval_minutes}-min interval (avg: ${{avgDelay}}min)<br><br>${{stationInfoHtml}}`;
-            }} else {{
-                stationInfoHtml = 'No delays in this interval';
-            }}
-            
-            document.getElementById('station-info').innerHTML = stationInfoHtml;
-            }} catch (error) {{
-                console.error('❌ Error updating map:', error);
-                document.getElementById('station-info').innerHTML = 'Error updating map: ' + error.message;
-            }}
-        }}
-        
-        // Timeline controls
-        document.getElementById('timeline').addEventListener('input', function(e) {{
-            pauseTimeline();
-            updateMap(parseInt(e.target.value));
-        }});
-        
-        function playTimeline() {{
-            if (!isPlaying) {{
-                isPlaying = true;
-                playInterval = setInterval(() => {{
-                    if (currentIndex < timeSteps.length - 1) {{
-                        currentIndex++;
-                        document.getElementById('timeline').value = currentIndex;
-                        updateMap(currentIndex);
-                    }} else {{
-                        pauseTimeline();
-                    }}
-                }}, 1000);  // 1 second per time step
-            }}
-        }}
-        
-        function pauseTimeline() {{
-            isPlaying = false;
-            if (playInterval) clearInterval(playInterval);
-        }}
-        
-        function resetTimeline() {{
-            pauseTimeline();
-            currentIndex = 0;
-            document.getElementById('timeline').value = 0;
-            updateMap(0);
-        }}
-        
-        // Initialize with error checking
-        console.log(' Starting map initialization...');
-        console.log('Map object:', map);
-        console.log('Station coordinates loaded:', Object.keys(stationCoords).length);
-        console.log('Time steps:', timeSteps.length);
-        console.log('Timeline data:', Object.keys(timelineData).length, 'time points');
-        
-        if (timeSteps.length === 0) {{
-            console.error('❌ No time steps available!');
-            document.getElementById('station-info').innerHTML = 'No time data available';
-        }} else if (Object.keys(stationCoords).length === 0) {{
-            console.error('❌ No station coordinates available!');
-            document.getElementById('station-info').innerHTML = 'No station coordinates available';
-        }} else if (Object.keys(timelineData).length === 0) {{
-            console.error('❌ No timeline data available!');
-            document.getElementById('station-info').innerHTML = 'No delay data available for this period';
-        }} else {{
-            console.log('✅ All data loaded successfully, initializing map...');
-            updateMap(0);
-        }}
-        
-        console.log('🎬 Map initialization complete!');
-    </script>
-</body>
-</html>'''
-    
-    # Save HTML file
-    if output_file is None:
-        safe_date = analysis_date.replace('-', '_')
-        safe_time = analysis_hhmm
-        output_file = f'incident_{incident_code}_{safe_date}_{safe_time}_progressive.html'
-    
-    try:
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write(html_content)
-        
-        print(f" DYNAMIC DELAY MAP CREATED! ")
-        print(f"File: {output_file}")
-        print(f"Time steps: {len(time_steps)} ({interval_minutes}-minute intervals)")
-        print(f"Stations mapped: {len([s for s in station_timeline_data.keys() if s in station_coords_map])}")
-        print(f" Features: Play/Pause controls, Color-coded delays, Interval-specific timeline")
-        print(" Open the HTML file in your browser to explore the dynamic timeline!")
-        
-    except Exception as e:
-        print(f"Error saving file: {e}")
-    
-    return html_content
-    num_intervals = period_minutes // interval_minutes
-    if period_minutes % interval_minutes != 0:
-        num_intervals += 1
-    
-    print(f"📊 Creating {num_intervals} time intervals of {interval_minutes} minutes each")
-    
-    # Load coordinates for ALL stations to show the complete network
-    print("�️ Loading coordinates for ALL network stations...")
-    coord_file_path = reference_files["all dft categories"]
-    with open(coord_file_path, 'r') as f:
-        stations_coords_data = json.load(f)
-    
-    # Create station coordinates mapping for stations with valid DFT categories only
-    station_coords_map = {}
-    valid_categories = {'A', 'B', 'C1', 'C2'}
-    
-    for station in stations_coords_data:
-        if isinstance(station, dict):
-            station_id = str(station.get('stanox', ''))
-            dft_category = station.get('dft_category', '')
-            latitude = station.get('latitude')
-            longitude = station.get('longitude')
-            description = station.get('description', 'Unknown Station')
-            
-            # Only include stations with valid DFT categories (A, B, C1, C2) and coordinates
-            if (dft_category in valid_categories and 
-                latitude is not None and longitude is not None and
-                str(latitude).replace('.', '').replace('-', '').isdigit() and 
-                str(longitude).replace('.', '').replace('-', '').isdigit()):
-                try:
-                    station_coords_map[station_id] = {
-                        'name': description,
-                        'lat': float(latitude),
-                        'lon': float(longitude),
-                        'category': dft_category
-                    }
-                except ValueError:
-                    continue
-    
-    print(f"📍 Loaded coordinates for {len(station_coords_map)} network stations (A/B/C1/C2 categories)")
-    
-    # Find affected stations across all intervals for delay data
-    print("🔍 Finding affected stations with delays...")
-    all_affected_stations = set()
-    
-    for i in range(num_intervals):
-        interval_start = analysis_datetime + timedelta(minutes=i * interval_minutes)
-        interval_start_str = interval_start.strftime('%H%M')
-        actual_interval_minutes = min(interval_minutes, period_minutes - (i * interval_minutes))
-        
-        # Get delay data for this interval to find affected stations
-        temp_data, _, _ = incident_view(incident_code, incident_date, analysis_date, interval_start_str, actual_interval_minutes)
-        if not temp_data.empty:
-            affected_in_interval = temp_data[(temp_data['DELAYED_TRAINS_OUT'] > 0) | (temp_data['DELAYED_TRAINS_IN'] > 0)]
-            for _, row in affected_in_interval.iterrows():
-                all_affected_stations.add(str(row['STATION_CODE']))
-    
-    print(f"🚉 Found {len(all_affected_stations)} stations with delays across all intervals")
-    
-    # Get incident location information for the 'X' marker
-    incident_location = None
-    incident_section_code = None
-    incident_station_name = None
-    
-    # Get incident section code by replicating the logic from incident_view function
-    # Look through the processed data to find the incident section code
-    processed_base = find_processed_data_path()
-    
-    if processed_base is not None:
-        # Get day of week for analysis date
-        day_mapping = {0: 'MO', 1: 'TU', 2: 'WE', 3: 'TH', 4: 'FR', 5: 'SA', 6: 'SU'}
-        analysis_day_suffix = day_mapping[analysis_datetime.weekday()]
-        
-        # Get all station directories and look for the incident
-        station_dirs = [d for d in os.listdir(processed_base) 
-                       if os.path.isdir(os.path.join(processed_base, d))]
-        
-        for station_dir in station_dirs[:5]:  # Just check first few stations to find section code
-            station_path = os.path.join(processed_base, station_dir)
-            day_file = os.path.join(station_path, f"{analysis_day_suffix}.parquet")
-            if os.path.exists(day_file):
-                try:
-                    df = pd.read_parquet(day_file, engine='fastparquet')
-                    incident_data = df[df['INCIDENT_NUMBER'] == incident_code].copy()
-                    if not incident_data.empty:
-                        incident_data['incident_date'] = incident_data['INCIDENT_START_DATETIME'].str.split(' ').str[0]
-                        incident_records = incident_data[incident_data['incident_date'] == incident_date].copy()
-                        if not incident_records.empty:
-                            incident_section_code = incident_records['SECTION_CODE'].iloc[0]
-                            break
-                except:
-                    continue
-    
-    # Find coordinates for incident location using STANOX code(s)
-    # Handle both single STANOX codes and colon-separated section codes (e.g., "04303:04730")
-    incident_locations = []  # Store multiple locations if section contains multiple STANOX codes
-    
-    if incident_section_code:
-        # Split section code by colon to handle cases like "04303:04730"
-        stanox_codes = [code.strip() for code in str(incident_section_code).split(':')]
-        
-        for stanox_code in stanox_codes:
-            for station in stations_coords_data:
-                if isinstance(station, dict) and str(station.get('stanox')) == str(stanox_code):
-                    latitude = station.get('latitude')
-                    longitude = station.get('longitude')
-                    if (latitude is not None and longitude is not None and
-                        str(latitude).replace('.', '').replace('-', '').isdigit() and 
-                        str(longitude).replace('.', '').replace('-', '').isdigit()):
-                        try:
-                            location_info = {
-                                'lat': float(latitude),
-                                'lon': float(longitude),
-                                'name': station.get('description', 'Incident Location'),
-                                'stanox': stanox_code
-                            }
-                            incident_locations.append(location_info)
-                            station_name = station.get('description', 'Unknown')
-                            print(f"📍 Found incident location: {station_name} ({stanox_code})")
-                        except ValueError:
-                            continue
-                    break  # Found this STANOX code, move to next one
-        
-        # For backward compatibility, set primary incident_location to first found location
-        if incident_locations:
-            incident_location = incident_locations[0]
-            incident_station_name = incident_location['name']
-    
-    # Create time intervals and get delay data for each interval using incident_view()
-    time_intervals = []
-    interval_heatmap_data = []  # Store heat map data for each interval
-    
-    for i in range(num_intervals):
-        interval_start = analysis_datetime + timedelta(minutes=i * interval_minutes)
-        interval_end = interval_start + timedelta(minutes=interval_minutes)
-        
-        # Calculate how many minutes this interval represents
-        actual_interval_minutes = min(interval_minutes, period_minutes - (i * interval_minutes))
-        
-        time_intervals.append({
-            'start': interval_start,
-            'end': interval_end,
-            'label': f"{interval_start.strftime('%H:%M')}-{interval_end.strftime('%H:%M')}"
-        })
-        
-        # Get delay data for this specific interval using incident_view
-        interval_start_str = interval_start.strftime('%H%M')
-        interval_delay_data, _, _ = incident_view(
-            incident_code, 
-            incident_date, 
-            analysis_date, 
-            interval_start_str, 
-            actual_interval_minutes
-        )
-        
-        # Convert interval delay data to heat map points
-        interval_points = []
-        if not interval_delay_data.empty:
-            for _, row in interval_delay_data.iterrows():
-                station_code = str(row['STATION_CODE'])
-                if station_code in station_coords_map:
-                    coords = station_coords_map[station_code]
-                    
-                    # Calculate average delay minutes per station for this interval
-                    total_delayed_trains = row['DELAYED_TRAINS_OUT'] + row['DELAYED_TRAINS_IN']
-                    
-                    if total_delayed_trains > 0:  # Only include stations with delays
-                        # Get delay minutes (these are lists, so we need to sum them)
-                        delay_minutes_out = row['DELAY_MINUTES_OUT'] if isinstance(row['DELAY_MINUTES_OUT'], list) else []
-                        delay_minutes_in = row['DELAY_MINUTES_IN'] if isinstance(row['DELAY_MINUTES_IN'], list) else []
-                        
-                        # Calculate total delay minutes for this station in this interval
-                        total_delay_minutes = sum(delay_minutes_out) + sum(delay_minutes_in)
-                        
-                        # Calculate average delay per train at this station
-                        average_delay_minutes = total_delay_minutes / total_delayed_trains if total_delayed_trains > 0 else 0
-                        
-                        if average_delay_minutes > 0:  # Only include if there are actual delay minutes
-                            interval_points.append({
-                                'lat': coords['lat'],
-                                'lng': coords['lon'],
-                                'weight': average_delay_minutes,  # Now using average delay minutes
-                                'name': coords['name'],
-                                'delayed_trains': total_delayed_trains,
-                                'total_delay_minutes': total_delay_minutes
-                            })
-        
-        interval_heatmap_data.append(interval_points)
-        print(f"  Interval {i+1}: {len(interval_points)} stations with delays")
-    
-    print(f"🚉 Processed {len(interval_heatmap_data)} time intervals for animation")
-    
-    # Generate filename if not provided
-    if output_file is None:
-        output_file = f'animated_heatmap_incident_{incident_code}_{analysis_date.replace("-", "_")}_{analysis_hhmm}_{period_minutes}min_interval{interval_minutes}min.html'
-    
-    # Create time step data for JavaScript
-    time_steps_js = []
-    for i, interval in enumerate(time_intervals):
-        time_steps_js.append(f"'{interval['label']}'")
-    
-    # Create heat map data for JavaScript
-    heatmap_data_js = []
-    for interval_points in interval_heatmap_data:
-        if interval_points:
-            points_js = []
-            for point in interval_points:
-                points_js.append(f"[{point['lat']}, {point['lng']}, {point['weight']}]")
-            heatmap_data_js.append(f"[{', '.join(points_js)}]")
-        else:
-            heatmap_data_js.append("[]")
-    
-    # Calculate global max weight for consistent scaling across all intervals
-    max_weight = 0
-    total_stations_affected = set()
-    
-    for interval_points in interval_heatmap_data:
-        for point in interval_points:
-            max_weight = max(max_weight, point['weight'])
-            total_stations_affected.add(point['name'])
-    
-    if max_weight == 0:
-        print("⚠️ No delay data found for heat map animation")
-        return None
-    
-    print(f"🚉 Found {len(total_stations_affected)} unique stations affected across all intervals")
-    print(f"📈 Maximum delay weight: {max_weight:.1f} minutes")
-    
-    # Generate filename if not provided
-    if output_file is None:
-        output_file = f'heatmap_incident_{incident_code}_{analysis_date.replace("-", "_")}_{analysis_hhmm}_{period_minutes}min.html'
-    
-    # Create JavaScript for ALL station markers (grey dots for unaffected stations)
-    all_stations_js = []
-    for station_id, coords in station_coords_map.items():
-        all_stations_js.append(f"[{coords['lat']}, {coords['lon']}, '{coords['name']}', '{station_id}']")
-    
-    stations_js_array = "[" + ", ".join(all_stations_js) + "]"
-    
-    # Create incident marker JavaScript for all found incident locations
-    incident_marker_js = ""
-    if incident_locations:
-        incident_marker_js = "// Add incident location markers with clean 'X' symbol\n"
-        for i, location in enumerate(incident_locations):
-            incident_marker_js += f'''
-        var incidentMarker{i} = L.marker([{location['lat']}, {location['lon']}], {{
-            icon: L.divIcon({{
-                className: 'incident-marker-clean',
-                html: '<div style="color: red; font-size: 20px; font-weight: bold; font-family: Arial, sans-serif;">✕</div>',
-                iconSize: [20, 20],
-                iconAnchor: [10, 10]
-            }})
-        }}).addTo(map);
-        
-        incidentMarker{i}.bindPopup('<b>Incident Location</b><br>Station: {location['name']}<br>STANOX: {location['stanox']}<br>Section Code: {incident_section_code}');
-        '''
-    
-    # Create animated HTML with heat map timeline controls
-    html_content = f'''
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Animated Railway Delay Heat Map - Incident {incident_code}</title>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" 
-          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-    <script src="https://cdn.jsdelivr.net/npm/leaflet.heat@0.2.0/dist/leaflet-heat.min.js"></script>
-    <style>
-        body {{ margin: 0; padding: 0; font-family: Arial, sans-serif; }}
-        #map {{ height: 100vh; width: 100vw; }}
-        
-        /* Enhanced heat map visibility */
-        .leaflet-heatmap-layer {{
-            opacity: 0.8 !important;
-        }}
-        
-        /* Incident marker styling */
-        .incident-marker {{
-            z-index: 1000 !important;
-        }}
-        .incident-marker div {{
-            box-shadow: 0 2px 6px rgba(0,0,0,0.5) !important;
-        }}
-        
-        .controls-panel {{
-            position: absolute;
-            bottom: 20px;
-            left: 20px;
-            right: 20px;
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-            z-index: 1000;
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-        }}
-        .controls-top {{
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 20px;
-        }}
-        .info-section {{
-            flex: 1;
-            font-size: 14px;
-        }}
-        .legend-section {{
-            flex: 1;
-            font-size: 12px;
-        }}
-        .controls-bottom {{
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }}
-        .time-controls {{
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }}
-        .time-slider {{
-            flex: 1;
-            margin: 0;
-        }}
-        .play-button {{
-            background: #007cba;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 5px;
-            cursor: pointer;
-        }}
-        .play-button:hover {{
-            background: #005a87;
-        }}
-        .current-time {{
-            font-weight: bold;
-            color: #007cba;
-            margin: 0;
-        }}
-        .legend-title {{
-            font-weight: bold;
-            margin-bottom: 8px;
-            color: #333;
-        }}
-        .legend-item {{
-            display: flex;
-            align-items: center;
-            margin: 2px 0;
-            font-size: 11px;
-        }}
-        .legend-color {{
-            width: 16px;
-            height: 16px;
-            margin-right: 6px;
-            border-radius: 2px;
-            margin-right: 8px;
-            border-radius: 3px;
-        }}
-        .title {{
-            font-size: 16px;
-            font-weight: bold;
-            margin-bottom: 10px;
-            color: #333;
-        }}
-    </style>
-</head>
-<body>
-    <div id="map"></div>
-    
-    <div class="controls-panel">
-        <div class="controls-top">
-            <div class="info-section">
-                <div style="font-size: 16px; font-weight: bold; margin-bottom: 10px; color: #333;">🔥 Railway Delay Heat Map - Incident {incident_code}</div>
-                <div><strong>Period:</strong> {analysis_date} {analysis_hhmm[:2]}:{analysis_hhmm[2:]} ({period_minutes} min)</div>
-                <div><strong>Intervals:</strong> {num_intervals} × {interval_minutes} min</div>
-                <div><strong>Stations Affected:</strong> {len(total_stations_affected)} | <strong>Max Avg Delay:</strong> {max_weight:.1f} minutes</div>
-                <div style="margin-top: 8px; font-size: 12px; color: #666;">
-                    Shows average delay minutes per station per interval across the entire network
-                </div>
-            </div>
-            <div class="legend-section">
-                <div class="legend-title">Delay Intensity Legend</div>
-                <div class="legend-item">
-                    <div class="legend-color" style="background: #32CD32;"></div>
-                    <span>Minor (1-5 min)</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-color" style="background: #FFD700;"></div>
-                    <span>Moderate (6-15 min)</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-color" style="background: #FF8C00;"></div>
-                    <span>Significant (16-30 min)</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-color" style="background: #FF0000;"></div>
-                    <span>Major (31-60 min)</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-color" style="background: #8B0000;"></div>
-                    <span>Severe (61-120 min)</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-color" style="background: #8A2BE2;"></div>
-                    <span>Critical (120+ min)</span>
-                </div>
-                <div style="font-size: 10px; margin-top: 5px; color: #666;">
-                    Red X = Incident Location
-                </div>
-            </div>
-        </div>
-        <div class="controls-bottom">
-            <div class="current-time" id="currentTime">Time: Loading...</div>
-            <div class="time-controls">
-                <button id="playButton" class="play-button">▶ Play Animation</button>
-                <input type="range" id="timeSlider" class="time-slider" min="0" max="{num_intervals-1}" value="0">
-                <span id="intervalInfo">Interval 1 of {num_intervals}</span>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        // Initialize map centered on UK
-        var map = L.map('map').setView([54.5, -2.5], 6);
-
-        // Add OpenStreetMap tiles
-        L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-            attribution: '© OpenStreetMap contributors'
-        }}).addTo(map);
-
-        // Time interval data for animation
-        var timeSteps = [{', '.join(time_steps_js)}];
-        var heatmapDataByInterval = [{', '.join(heatmap_data_js)}];
-        var currentIndex = 0;
-        var isPlaying = false;
-        var playInterval;
-        
-        // Create heat layer (initially empty) with precise, less spread-out settings
-        // Using same color grading as aggregate_view function's delay severity chart
-        var heat = L.heatLayer([], {{
-            radius: 18,    // Slightly larger radius for better visibility
-            blur: 6,       // Less blur for sharper edges
-            maxZoom: 17,
-            max: 1.0,      // Normalize to 1.0 for better visibility
-            minOpacity: 0.3,  // Minimum opacity to ensure visibility
-            gradient: {{
-                0.0: '#32CD32',       // Bright lime green for minor delays (1-5 min)
-                0.17: '#FFD700',      // Bright gold for moderate delays (6-15 min)
-                0.33: '#FF8C00',      // Bright dark orange for significant delays (16-30 min)
-                0.50: '#FF0000',      // Bright red for major delays (31-60 min)
-                0.67: '#8B0000',      // Dark red for severe delays (61-120 min)
-                1.0: '#8A2BE2'        // Blue violet for critical delays (120+ min)
-            }}
-        }}).addTo(map);
-        
-        // Add ALL network stations as grey dots
-        var allStations = {stations_js_array};
-        var stationMarkers = [];
-        
-        allStations.forEach(function(station) {{
-            var marker = L.circleMarker([station[0], station[1]], {{
-                radius: 2,
-                fillColor: '#808080',
-                color: '#606060',
-                weight: 1,
-                opacity: 0.6,
-                fillOpacity: 0.4
-            }}).addTo(map);
-            
-            marker.bindPopup('<b>' + station[2] + '</b><br>Station ID: ' + station[3] + '<br>Status: No delays');
-            stationMarkers.push(marker);
-        }});
-        
-        console.log('Added', stationMarkers.length, 'network station markers');
-        
-        {incident_marker_js}
-        
-        // Function to update heat map for specific time interval
-        function updateHeatMap(index) {{
-            if (index >= 0 && index < heatmapDataByInterval.length) {{
-                var data = heatmapDataByInterval[index];
-                console.log('Updating heat map for interval', index, 'with', data.length, 'points:', data);
-                heat.setLatLngs(data);
-                document.getElementById('currentTime').textContent = 'Time: ' + timeSteps[index];
-                var avgDelay = data.length > 0 ? (data.reduce((sum, point) => sum + point[2], 0) / data.length) : 0;
-                document.getElementById('intervalInfo').textContent = 'Interval ' + (index + 1) + ' of ' + timeSteps.length + ' (' + data.length + ' stations, avg: ' + avgDelay.toFixed(1) + ' min)';
-                document.getElementById('timeSlider').value = index;
-                currentIndex = index;
-            }}
-        }}
-        
-        // Animation controls
-        function playAnimation() {{
-            if (isPlaying) {{
-                clearInterval(playInterval);
-                isPlaying = false;
-                document.getElementById('playButton').textContent = '▶ Play Animation';
-            }} else {{
-                isPlaying = true;
-                document.getElementById('playButton').textContent = '⏸ Pause Animation';
-                playInterval = setInterval(function() {{
-                    currentIndex++;
-                    if (currentIndex >= timeSteps.length) {{
-                        currentIndex = 0;
-                    }}
-                    updateHeatMap(currentIndex);
-                }}, 1500); // Change interval every 1.5 seconds
-            }}
-        }}
-        
-        // Add discrete reference markers (small, subtle dots)
-        var referenceMarkers = L.layerGroup();
-        if (heatmapDataByInterval.length > 0 && heatmapDataByInterval[0].length > 0) {{
-            heatmapDataByInterval[0].forEach(function(point, i) {{
-                L.circleMarker([point[0], point[1]], {{
-                    radius: 2,           // Much smaller
-                    fillColor: '#333',   // Dark gray instead of red
-                    color: '#666',       // Gray border
-                    weight: 1,           // Thin border
-                    opacity: 0.6,        // Semi-transparent
-                    fillOpacity: 0.4     // More subtle
-                }}).bindPopup('Station ' + (i+1) + '<br>Avg Delay: ' + point[2].toFixed(1) + ' min').addTo(referenceMarkers);
-            }});
-            referenceMarkers.addTo(map);
-            console.log('Added', heatmapDataByInterval[0].length, 'discrete reference markers');
-        }}
-        
-        // Check if required libraries are loaded
-        console.log('🔍 Checking libraries...');
-        console.log('Leaflet loaded:', typeof L !== 'undefined');
-        console.log('Heat layer available:', typeof L !== 'undefined' && typeof L.heatLayer !== 'undefined');
-        
-        if (typeof L === 'undefined') {{
-            document.getElementById('currentTime').textContent = 'Error: Leaflet library failed to load';
-            return;
-        }}
-        
-        if (typeof L.heatLayer === 'undefined') {{
-            document.getElementById('currentTime').textContent = 'Error: Heat map plugin failed to load';
-            return;
-        }}
-        
-        // Initialize function to set up the heat map
-        function initializeHeatMap() {{
-            console.log('🔍 Initializing heat map...');
-            console.log('Time steps:', timeSteps.length);
-            console.log('Heatmap data intervals:', heatmapDataByInterval.length);
-            console.log('All stations array length:', allStations.length);
-            
-            // Check if required elements exist
-            var timeElement = document.getElementById('currentTime');
-            var sliderElement = document.getElementById('timeSlider');
-            var buttonElement = document.getElementById('playButton');
-            
-            console.log('DOM elements found:', {{
-                currentTime: !!timeElement,
-                timeSlider: !!sliderElement,
-                playButton: !!buttonElement
-            }});
-            
-            // If elements are not found, retry after a short delay
-            if (!timeElement || !sliderElement || !buttonElement) {{
-                console.log('⏳ DOM elements not ready, retrying in 100ms...');
-                setTimeout(initializeHeatMap, 100);
-                return;
-            }}
-        
-        // Set up event listeners first
-        if (buttonElement) {{
-            buttonElement.addEventListener('click', playAnimation);
-            console.log('✅ Play button event listener attached');
-        }}
-        
-        if (sliderElement) {{
-            sliderElement.addEventListener('input', function(e) {{
-                updateHeatMap(parseInt(e.target.value));
-                // Pause animation when user manually changes time
-                if (isPlaying) {{
-                    clearInterval(playInterval);
-                    isPlaying = false;
-                    if (buttonElement) buttonElement.textContent = '▶ Play Animation';
-                }}
-            }});
-            console.log('✅ Slider event listener attached');
-        }}
-        
-            // Initialize with first interval if everything is ready
-            if (timeSteps.length > 0 && timeElement) {{
-                console.log('✅ Initializing with first interval');
-                updateHeatMap(0);
-            }} else {{
-                console.error('❌ Missing elements or no data:', {{
-                    timeSteps: timeSteps.length,
-                    timeElement: !!timeElement
-                }});
-                if (timeElement) timeElement.textContent = 'Error: No data available';
-            }}
-        }}
-        
-        // Start initialization - use multiple approaches to ensure it runs
-        if (document.readyState === 'loading') {{
-            document.addEventListener('DOMContentLoaded', initializeHeatMap);
-        }} else {{
-            // DOM is already loaded, start immediately
-            setTimeout(initializeHeatMap, 50);
-        }}
-    </script>
-</body>
-</html>'''
-    
-    # Save the HTML file
-    with open(output_file, 'w', encoding='utf-8') as f:
-        f.write(html_content)
-    
-    print(f"🔥 Animated HTML heat map saved as: {output_file}")
-    print(f"🌐 Open {output_file} in your browser to view the animated heat map with timeline controls")
-    print(f"🎬 Use Play/Pause button and slider to control the temporal animation")
-    
-    return html_content
-
 
 def incident_view_heatmap_html(incident_code, incident_date, analysis_date, analysis_hhmm, period_minutes, interval_minutes=10, output_file=None):
     """
@@ -2608,568 +1381,18 @@ def incident_view_heatmap_html(incident_code, incident_date, analysis_date, anal
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write(html_content)
         
-        print(f"🌡️ CONTINUOUS HEATMAP CREATED! ")
+        print(f"CONTINUOUS HEATMAP CREATED! ")
         print(f"File: {output_file}")
         print(f"Time steps: {len(time_steps)} ({interval_minutes}-minute intervals)")
         print(f"Total stations mapped: {len(all_station_coords_map)} (DFT categories A/B/C1/C2)")
         print(f"Affected stations: {len(station_timeline_data)}")
-        print(f"🔥 Features: Continuous delay heatmap with fading colors + grey station dots overlay")
-        print("🌐 Open the HTML file in your browser to explore the continuous heatmap!")
+        print(f"Features: Continuous delay heatmap with fading colors + grey station dots overlay")
+        print(" Open the HTML file in your browser to explore the continuous heatmap!")
         
     except Exception as e:
         print(f"Error saving file: {e}")
     
     return html_content
-
-
-# all functions for the station view:
-
-def station_view(incident_code, incident_date, station_id, interval_minutes=30):
-    """
-    Station analysis with corrected timing logic - simplified output.
-    """
-    
-    # Convert incident date
-    try:
-        incident_datetime = datetime.strptime(incident_date, '%d-%b-%Y')
-        incident_day_suffix = incident_datetime.strftime('%a').upper()[:2]
-    except ValueError as e:
-        print(f"Error parsing date: {e}")
-        return None
-    
-    # Load data
-    processed_base = '../processed_data'
-    station_file = os.path.join(processed_base, station_id, f"{incident_day_suffix}.parquet")
-    
-    if not os.path.exists(station_file):
-        print(f"File not found: {station_file}")
-        return None
-    
-    try:
-        station_data = pd.read_parquet(station_file, engine='fastparquet')
-    except Exception as e:
-        print(f"Error loading data: {e}")
-        return None
-    
-    # Filter for trains with planned calls
-    train_mask = station_data['PLANNED_CALLS'].notna()
-    all_train_data = station_data[train_mask].copy()
-    
-    # Maximum delay deduplication
-    if len(all_train_data) > 0:
-        all_train_data['delay_numeric'] = pd.to_numeric(all_train_data['PFPI_MINUTES'], errors='coerce').fillna(0)
-        all_train_data['dedup_priority'] = all_train_data['delay_numeric'] * 1000
-        
-        if 'ACTUAL_CALLS' in all_train_data.columns:
-            all_train_data['dedup_priority'] += all_train_data['ACTUAL_CALLS'].notna().astype(int) * 100
-        
-        basic_dedup_cols = ['TRAIN_SERVICE_CODE', 'PLANNED_CALLS']
-        basic_available = [col for col in basic_dedup_cols if col in all_train_data.columns]
-        
-        if len(basic_available) >= 2:
-            all_train_data = all_train_data.sort_values(['delay_numeric', 'dedup_priority'], ascending=[False, False])
-            all_train_data = all_train_data.drop_duplicates(subset=basic_available, keep='first')
-            all_train_data = all_train_data.drop(['delay_numeric', 'dedup_priority'], axis=1)
-    
-    if len(all_train_data) == 0:
-        return None
-    
-    # Process times
-    def parse_time_simple(time_val, base_date):
-        if pd.isna(time_val):
-            return None
-        try:
-            time_str = str(int(time_val)).zfill(4)
-            hour = int(time_str[:2])
-            minute = int(time_str[2:])
-            return base_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        except:
-            return None
-    
-    # Parse times and apply corrected timing logic
-    all_train_data['planned_dt'] = all_train_data['PLANNED_CALLS'].apply(
-        lambda x: parse_time_simple(x, incident_datetime))
-    all_train_data['original_actual_dt'] = all_train_data['ACTUAL_CALLS'].apply(
-        lambda x: parse_time_simple(x, incident_datetime))
-    all_train_data['delay_minutes'] = pd.to_numeric(all_train_data['PFPI_MINUTES'], errors='coerce').fillna(0)
-    
-    # Create corrected actual times
-    corrected_actual_times = []
-    for _, row in all_train_data.iterrows():
-        planned_dt = row['planned_dt']
-        original_actual_dt = row['original_actual_dt']
-        delay_min = row['delay_minutes']
-        
-        if pd.isna(planned_dt):
-            corrected_actual_times.append(None)
-            continue
-            
-        if delay_min > 0:
-            corrected_actual = planned_dt + timedelta(minutes=delay_min)
-            corrected_actual_times.append(corrected_actual)
-        elif delay_min == 0:
-            corrected_actual_times.append(planned_dt)
-        else:
-            if pd.notna(original_actual_dt):
-                corrected_actual_times.append(original_actual_dt)
-            else:
-                corrected_actual_times.append(planned_dt)
-    
-    all_train_data['effective_time'] = corrected_actual_times
-    valid_data = all_train_data[all_train_data['effective_time'].notna()].copy()
-    
-    if len(valid_data) == 0:
-        return None
-    
-    # Create time intervals
-    day_start = valid_data['effective_time'].min()
-    day_end = valid_data['effective_time'].max()
-    current_time = day_start
-    intervals = []
-    
-    while current_time < day_end:
-        next_time = current_time + timedelta(minutes=interval_minutes)
-        
-        interval_trains = valid_data[
-            (valid_data['effective_time'] >= current_time) & 
-            (valid_data['effective_time'] < next_time)
-        ]
-        
-        if len(interval_trains) > 0:
-            arrival_trains = interval_trains[interval_trains['EVENT_TYPE'] != 'C']
-            cancellation_trains = interval_trains[interval_trains['EVENT_TYPE'] == 'C']
-            
-            if len(arrival_trains) > 0 or len(cancellation_trains) > 0:
-                if len(arrival_trains) > 0:
-                    delay_values = arrival_trains['delay_minutes'].tolist()
-                    ontime_arrivals = len([d for d in delay_values if d == 0.0])
-                    delayed_arrivals = len([d for d in delay_values if d > 0.0])
-                    delayed_minutes = [round(d, 1) for d in delay_values if d > 0.0]
-                else:
-                    ontime_arrivals = 0
-                    delayed_arrivals = 0
-                    delayed_minutes = []
-                
-                total_cancellations = len(cancellation_trains)
-                
-                intervals.append({
-                    'time_period': f"{current_time.strftime('%H:%M')}-{next_time.strftime('%H:%M')}",
-                    'ontime_arrival_count': ontime_arrivals,
-                    'delayed_arrival_count': delayed_arrivals,
-                    'cancellation_count': total_cancellations,
-                    'delay_minutes': delayed_minutes
-                })
-        
-        current_time = next_time
-    
-    # Create and return final output
-    station_summary = pd.DataFrame(intervals)
-    
-    if len(station_summary) == 0:
-        return None
-    
-    station_summary['delay_minutes'] = station_summary['delay_minutes'].apply(
-        lambda x: x if isinstance(x, list) else []
-    )
-    
-    final_output = station_summary[['time_period', 'ontime_arrival_count', 'delayed_arrival_count', 'cancellation_count', 'delay_minutes']].copy()
-    
-    # Print the output table
-    print(f"\nStation {station_id} Analysis - {incident_date} (Incident {incident_code})")
-    print("=" * 80)
-    print(final_output.to_string(index=False))
-    print("=" * 80)
-    
-    return final_output
-
-print("station_view function ready!")
-
-
-def plot_station_arrivals_violin(incident_code, incident_date, station_id, interval_minutes=60, num_platforms=12, figsize=(18, 12)):
-    """
-    Generate a normalized violin plot for train arrivals at a station during an incident.
-    """
-    
-    import matplotlib.pyplot as plt
-    import numpy as np
-    from scipy import stats
-    
-    # Get station analysis data (without printing output)
-    import io
-    import sys
-    
-    # Temporarily redirect stdout to suppress station_view output
-    old_stdout = sys.stdout
-    sys.stdout = buffer = io.StringIO()
-    
-    try:
-        summary_df = station_view(incident_code, incident_date, station_id, interval_minutes)
-    finally:
-        sys.stdout = old_stdout
-    
-    if summary_df is None or summary_df.empty:
-        print("No data available for analysis")
-        return None
-    
-    # Normalize arrival counts by platform count
-    ontime_counts = summary_df['ontime_arrival_count'].values / num_platforms
-    delayed_counts = summary_df['delayed_arrival_count'].values / num_platforms
-    
-    # Remove zero values for cleaner visualization
-    non_zero_ontime = ontime_counts[ontime_counts > 0]
-    non_zero_delayed = delayed_counts[delayed_counts > 0]
-    
-    if len(non_zero_ontime) == 0 and len(non_zero_delayed) == 0:
-        print("No train arrivals found to plot")
-        return None
-        
-    # Prepare combined data for violin plot
-    all_ontime_data = list(non_zero_ontime) if len(non_zero_ontime) > 0 else []
-    all_delayed_data = list(non_zero_delayed) if len(non_zero_delayed) > 0 else []
-    
-    combined_data = []
-    colors_for_scatter = []
-    
-    if len(all_ontime_data) > 0:
-        combined_data.extend(all_ontime_data)
-        colors_for_scatter.extend(['green'] * len(all_ontime_data))
-    
-    if len(all_delayed_data) > 0:
-        combined_data.extend(all_delayed_data)
-        colors_for_scatter.extend(['red'] * len(all_delayed_data))
-    
-    # Create the violin plot
-    fig, ax = plt.subplots(figsize=figsize)
-    
-    violin_parts = ax.violinplot([combined_data], positions=[0], showmeans=True, 
-                                showmedians=True, showextrema=True, widths=0.8)
-    
-    # Customize violin appearance
-    for pc in violin_parts['bodies']:
-        pc.set_facecolor('lightblue')
-        pc.set_alpha(0.6)
-        pc.set_edgecolor('darkblue')
-        pc.set_linewidth(2)
-    
-    violin_parts['cmeans'].set_color('black')
-    violin_parts['cmeans'].set_linewidth(3)
-    violin_parts['cmedians'].set_color('white')
-    violin_parts['cmedians'].set_linewidth(4)
-    violin_parts['cbars'].set_color('black')
-    violin_parts['cmins'].set_color('black')
-    violin_parts['cmaxes'].set_color('black')
-    
-    # Add scatter points with different colors
-    np.random.seed(42)
-    combined_array = np.array(combined_data)
-    colors_array = np.array(colors_for_scatter)
-    jitter_all = np.random.normal(0, 0.05, len(combined_data))
-    
-    if len(all_ontime_data) > 0:
-        ontime_mask = colors_array == 'green'
-        ax.scatter(jitter_all[ontime_mask], combined_array[ontime_mask], 
-                  alpha=0.8, s=80, color='darkgreen', zorder=3, 
-                  edgecolors='white', linewidth=1.5, 
-                  label=f'On-time arrivals')
-    
-    if len(all_delayed_data) > 0:
-        delayed_mask = colors_array == 'red'
-        ax.scatter(jitter_all[delayed_mask], combined_array[delayed_mask], 
-                  alpha=0.8, s=80, color='darkred', zorder=3, 
-                  edgecolors='white', linewidth=1.5, 
-                  label=f'Delayed arrivals')
-    
-    # Calculate density for x-axis scaling
-    kde_combined = stats.gaussian_kde(combined_data, bw_method=0.3)
-    y_min, y_max = min(combined_data), max(combined_data)
-    y_range = np.linspace(y_min, y_max, 100)
-    density_values = kde_combined(y_range)
-    max_density = np.max(density_values)
-    
-    # Set axis properties with numerical density values
-    violin_width = 0.4
-    ax.set_xlim(-violin_width * 1.5, violin_width * 1.5)
-    ax.set_ylim(0, max(combined_data) + 0.5)
-    
-    density_positions = [-violin_width, -violin_width/2, 0, violin_width/2, violin_width]
-    density_values_at_positions = [max_density * abs(pos) / violin_width for pos in density_positions]
-    density_labels = [f'{val:.3f}' for val in density_values_at_positions]
-    
-    ax.set_xticks(density_positions)
-    ax.set_xticklabels(density_labels)
-    
-    # Set labels and title
-    ax.set_xlabel('Probability Density (trains per platform per period)', fontsize=20)
-    ax.set_ylabel(f'Train Arrivals per Platform per {interval_minutes}-minute Period', fontsize=20)
-    
-    # Calculate statistics
-    mean_combined = np.mean(combined_data)
-    median_combined = np.median(combined_data)
-    std_combined = np.std(combined_data)
-    
-    # Finalize plot
-    ax.grid(True, alpha=0.3, axis='y')
-    ax.legend(loc='upper right', fontsize=20)
-    plt.tight_layout()
-    plt.show()
-    
-    # Return analysis results
-    results = {
-        'summary_df': summary_df,
-        'combined_stats': {
-            'mean': mean_combined,
-            'median': median_combined,
-            'std': std_combined,
-            'range': (min(combined_data), max(combined_data)),
-            'max_density': max_density,
-            'total_periods': len(combined_data)
-        },
-        'ontime_stats': {
-            'periods': len(all_ontime_data),
-            'mean': np.mean(all_ontime_data) if len(all_ontime_data) > 0 else 0,
-            'median': np.median(all_ontime_data) if len(all_ontime_data) > 0 else 0,
-            'range': (min(all_ontime_data), max(all_ontime_data)) if len(all_ontime_data) > 0 else (0, 0),
-            'total': sum(all_ontime_data) * num_platforms if len(all_ontime_data) > 0 else 0
-        },
-        'delayed_stats': {
-            'periods': len(all_delayed_data),
-            'mean': np.mean(all_delayed_data) if len(all_delayed_data) > 0 else 0,
-            'median': np.median(all_delayed_data) if len(all_delayed_data) > 0 else 0,
-            'range': (min(all_delayed_data), max(all_delayed_data)) if len(all_delayed_data) > 0 else (0, 0),
-            'total': sum(all_delayed_data) * num_platforms if len(all_delayed_data) > 0 else 0
-        },
-        'parameters': {
-            'incident_code': incident_code,
-            'incident_date': incident_date,
-            'station_id': station_id,
-            'interval_minutes': interval_minutes,
-            'num_platforms': num_platforms
-        }
-    }
-    
-    return results
-
-print("plot_station_arrivals_violin() function ready!")
-
-
-def plot_normal_operations_violin(incident_code, incident_date, station_id, interval_minutes=60, num_platforms=12, figsize=(18, 12)):
-    """
-    Generate a normalized violin plot for "normal" operations using identical data filtering
-    as the incident analysis, but treating all trains as on-time.
-    """
-    
-    import matplotlib.pyplot as plt
-    import numpy as np
-    from scipy import stats
-    
-    # Get the incident analysis data to ensure identical filtering (without printing output)
-    import io
-    import sys
-    
-    # Temporarily redirect stdout to suppress station_view output
-    old_stdout = sys.stdout
-    sys.stdout = buffer = io.StringIO()
-    
-    try:
-        incident_summary = station_view(incident_code, incident_date, station_id, interval_minutes)
-    finally:
-        sys.stdout = old_stdout
-    
-    if incident_summary is None or incident_summary.empty:
-        print("No incident data available for comparison")
-        return None
-    
-    # Convert incident data to "normal operations" by treating all trains as on-time
-    normal_intervals = []
-    
-    for _, row in incident_summary.iterrows():
-        total_arrivals = row['ontime_arrival_count'] + row['delayed_arrival_count']
-        
-        if total_arrivals > 0:
-            normal_intervals.append({
-                'time_period': row['time_period'],
-                'arrival_count': total_arrivals,
-                'original_ontime': row['ontime_arrival_count'],
-                'original_delayed': row['delayed_arrival_count']
-            })
-    
-    corrected_normal_summary = pd.DataFrame(normal_intervals)
-    
-    if len(corrected_normal_summary) == 0:
-        print("No corrected normal operations data to plot")
-        return None
-    
-    # Normalize by platform count
-    arrival_counts = corrected_normal_summary['arrival_count'].values / num_platforms
-    non_zero_arrivals = arrival_counts[arrival_counts > 0]
-    
-    # Create the violin plot
-    fig, ax = plt.subplots(figsize=figsize)
-    
-    violin_parts = ax.violinplot([non_zero_arrivals], positions=[0], showmeans=True, 
-                                showmedians=True, showextrema=True, widths=0.8)
-    
-    # Customize violin appearance
-    for pc in violin_parts['bodies']:
-        pc.set_facecolor('lightgreen')
-        pc.set_alpha(0.7)
-        pc.set_edgecolor('darkgreen')
-        pc.set_linewidth(2)
-    
-    violin_parts['cmeans'].set_color('black')
-    violin_parts['cmeans'].set_linewidth(3)
-    violin_parts['cmedians'].set_color('white')
-    violin_parts['cmedians'].set_linewidth(4)
-    violin_parts['cbars'].set_color('black')
-    violin_parts['cmins'].set_color('black')
-    violin_parts['cmaxes'].set_color('black')
-    
-    # Add scatter points (all green since all are treated as "on-time")
-    np.random.seed(42)
-    jitter_all = np.random.normal(0, 0.05, len(non_zero_arrivals))
-    ax.scatter(jitter_all, non_zero_arrivals, alpha=0.8, s=80, color='darkgreen', 
-              zorder=3, edgecolors='white', linewidth=1.5)
-    
-    # Calculate density for x-axis scaling
-    kde_corrected = stats.gaussian_kde(non_zero_arrivals, bw_method=0.3)
-    y_min_corr, y_max_corr = min(non_zero_arrivals), max(non_zero_arrivals)
-    y_range_corr = np.linspace(y_min_corr, y_max_corr, 100)
-    density_values_corr = kde_corrected(y_range_corr)
-    max_density_corr = np.max(density_values_corr)
-    
-    # Set axis properties with numerical density values
-    violin_width = 0.4
-    ax.set_xlim(-violin_width * 1.5, violin_width * 1.5)
-    ax.set_ylim(0, max(non_zero_arrivals) + 0.5)
-    
-    density_positions = [-violin_width, -violin_width/2, 0, violin_width/2, violin_width]
-    density_values_at_positions = [max_density_corr * abs(pos) / violin_width for pos in density_positions]
-    density_labels = [f'{val:.3f}' for val in density_values_at_positions]
-    
-    ax.set_xticks(density_positions)
-    ax.set_xticklabels(density_labels)
-    
-    # Set labels and title
-    ax.set_xlabel('Probability Density (trains per platform per period)', fontsize=20)
-    ax.set_ylabel(f'Normalized Arrivals per Platform per {interval_minutes}-minute Period', fontsize=20)
-    
-    # Calculate statistics
-    mean_corrected = np.mean(non_zero_arrivals)
-    median_corrected = np.median(non_zero_arrivals)
-    std_corrected = np.std(non_zero_arrivals)
-    
-    # Finalize plot
-    ax.grid(True, alpha=0.3, axis='y')
-    plt.tight_layout()
-    plt.show()
-    
-    # Return results
-    results = {
-        'corrected_normal_summary_df': corrected_normal_summary,
-        'corrected_normal_stats': {
-            'mean': mean_corrected,
-            'median': median_corrected,
-            'std': std_corrected,
-            'range': (min(non_zero_arrivals), max(non_zero_arrivals)),
-            'max_density': max_density_corr,
-            'active_periods': len(non_zero_arrivals),
-            'total_trains': corrected_normal_summary['arrival_count'].sum()
-        },
-        'parameters': {
-            'incident_code': incident_code,
-            'incident_date': incident_date,
-            'station_id': station_id,
-            'interval_minutes': interval_minutes,
-            'num_platforms': num_platforms,
-            'note': 'Uses identical data filtering as incident analysis'
-        }
-    }
-    
-    return results
-
-print("plot_normal_operations_violin() function ready!")
-
-
-def plot_2d_kde_arrivals_delays(station_summary_df, station_id, incident_code, incident_date, num_platforms=12, figsize=(12, 8)):
-    import numpy as np
-    import matplotlib.pyplot as plt
-    from scipy.stats import gaussian_kde
-    from datetime import datetime
-    
-    if station_summary_df is None or station_summary_df.empty:
-        print("No station summary data available for 2D KDE analysis")
-        return None, None
-    
-    # Extract arrival counts and average delay data from station_view outputs
-    arrival_counts = []
-    delay_values = []
-    
-    for _, row in station_summary_df.iterrows():
-        # Get total arrivals for this time period and normalize by platform count
-        total_arrivals = row['ontime_arrival_count'] + row['delayed_arrival_count']
-        normalized_arrivals = total_arrivals / num_platforms
-        
-        # Calculate average delay for this time period
-        delays = row['delay_minutes']
-        if isinstance(delays, list) and len(delays) > 0:
-            # Calculate average delay for this period (including on-time trains as 0 delay)
-            total_delay_minutes = sum(delays)
-            delayed_trains = len(delays)
-            ontime_trains = row['ontime_arrival_count']
-            
-            # Average delay across ALL trains in this period (delayed + on-time)
-            if total_arrivals > 0:
-                average_delay = total_delay_minutes / total_arrivals
-                arrival_counts.append(normalized_arrivals)
-                delay_values.append(average_delay)
-        elif total_arrivals > 0:
-            # Period with only on-time trains (average delay = 0)
-            arrival_counts.append(normalized_arrivals)
-            delay_values.append(0.0)
-    
-    if len(arrival_counts) < 10:
-        print(f"Insufficient data points ({len(arrival_counts)}) for KDE analysis")
-        return None, None
-    
-    x = np.array(arrival_counts)
-    y = np.array(delay_values)
-    
-    xy = np.vstack([x, y])
-    kde = gaussian_kde(xy)
-    
-    x_grid = np.linspace(x.min(), x.max(), 50)
-    y_grid = np.linspace(y.min(), y.max(), 50)
-    X, Y = np.meshgrid(x_grid, y_grid)
-    positions = np.vstack([X.ravel(), Y.ravel()])
-    Z = kde(positions).reshape(X.shape)
-    
-    fig, ax = plt.subplots(figsize=figsize)
-    
-    # Create custom colormap that starts with white for zero/low values
-    import matplotlib.colors as mcolors
-    import matplotlib.cm as cm
-    
-    # Create a custom colormap starting with white
-    colors = ['white', '#440154', '#31688e', '#35b779', '#fde725']  # white -> viridis colors
-    n_bins = 256
-    custom_cmap = mcolors.LinearSegmentedColormap.from_list('custom_viridis', colors, N=n_bins)
-    
-    # Set the lowest density values to map to white explicitly
-    Z_min, Z_max = Z.min(), Z.max()
-    norm = mcolors.Normalize(vmin=Z_min, vmax=Z_max)
-    
-    contour = ax.contourf(X, Y, Z, levels=20, cmap=custom_cmap, norm=norm, alpha=0.7)
-    ax.scatter(x, y, c='red', s=15, alpha=0.6, edgecolors='black', linewidth=0.5)
-    
-    ax.set_xlabel(f'Train Arrivals per Platform per Period')
-    ax.set_ylabel('Average Delay Minutes')
-    ax.grid(True, alpha=0.3)
-    
-    plt.colorbar(contour, ax=ax, label='Density')
-    plt.tight_layout()
-    plt.show()
-    
-    return fig, ax
 
 # train view functions:
 
@@ -3270,16 +1493,19 @@ def train_view(all_data, origin_code, destination_code, input_date_str):
         display(incidents_on_date[cols_to_show])
         return incidents_on_date[cols_to_show]
 
-def get_stanox_for_service(all_data, train_service_code, origin_code, destination_code):
+def get_stanox_for_service(all_data, train_service_code, origin_code, destination_code, date_str=None):
     """
-    For a given train service and OD pair, find the first train of the day (by earliest PLANNED_ORIGIN_GBTT_DATETIME),
-    then order the unique STANOX codes for that train:
-    - Use PLANNED_ORIGIN_GBTT_DATETIME for the origin,
-    - PLANNED_DEST_GBTT_DATETIME for the destination,
-    - PLANNED_CALLS for all other stations.
-    Return the ordered list of STANOX codes for that train only, always including the origin as the first element.
+    Get ALL unique STANOX codes that a train service calls at, regardless of specific train instance.
+    Returns a list of all stations that this service code stops at.
+    
+    Strategy:
+    1. Filter to the specified service code and OD pair
+    2. Optionally filter by date if provided
+    3. Collect ALL unique STANOX codes that appear with valid scheduled stops
+    4. Return the complete set (map will connect them by proximity)
     """
     import pandas as pd
+    from datetime import datetime
 
     # --- Ensure OD_PAIR exists ---
     if 'OD_PAIR' not in all_data.columns:
@@ -3302,38 +1528,48 @@ def get_stanox_for_service(all_data, train_service_code, origin_code, destinatio
         print(message)
         return message
 
-    # --- Find the first train of the day (earliest PLANNED_ORIGIN_GBTT_DATETIME) ---
-    subset['PLANNED_ORIGIN_GBTT_DATETIME'] = pd.to_datetime(subset['PLANNED_ORIGIN_GBTT_DATETIME'], format='%H%M', errors='coerce')
-    first_origin_time = subset['PLANNED_ORIGIN_GBTT_DATETIME'].min()
-    first_train = subset[subset['PLANNED_ORIGIN_GBTT_DATETIME'] == first_origin_time].copy()
+    # --- Filter by date if provided ---
+    if date_str:
+        try:
+            # Filter by EVENT_DATETIME containing the target date
+            date_subset = subset[subset['EVENT_DATETIME'].str.contains(date_str, na=False)].copy()
+            
+            if not date_subset.empty:
+                subset = date_subset
+                print(f"✅ Filtered to date: {date_str}")
+            else:
+                print(f"⚠️ No records found for date {date_str}, using all dates for this service")
+        except Exception as e:
+            print(f"⚠️ Error filtering by date {date_str}: {e}, using all dates")
 
-    # --- For this train, get all unique STANOX codes and their times ---
-    def get_time(row):
-        stanox = str(row['STANOX'])
-        if stanox == str(origin_code) and pd.notna(row.get('PLANNED_ORIGIN_GBTT_DATETIME', None)):
-            return pd.to_datetime(row['PLANNED_ORIGIN_GBTT_DATETIME'], format='%H%M', errors='coerce')
-        elif stanox == str(destination_code) and pd.notna(row.get('PLANNED_DEST_GBTT_DATETIME', None)):
-            return pd.to_datetime(row['PLANNED_DEST_GBTT_DATETIME'], format='%H%M', errors='coerce')
-        elif pd.notna(row.get('PLANNED_CALLS', None)) and str(row['PLANNED_CALLS']).isdigit() and len(str(row['PLANNED_CALLS'])) == 4:
-            # Use arbitrary date for time-only values to allow sorting
-            return pd.to_datetime(str(row['PLANNED_CALLS']), format='%H%M', errors='coerce')
-        else:
-            return pd.NaT
-
-    # Keep only unique STANOX for this train, keeping the earliest time for each
-    first_train['ORDER_TIME'] = first_train.apply(get_time, axis=1)
-    ordered = first_train.groupby('STANOX', as_index=False)['ORDER_TIME'].min()
-    ordered = ordered.sort_values('ORDER_TIME')
-    stanox_list = ordered['STANOX'].astype(str).tolist()
-
-    # Always include origin_code as the first element, even if not present in the data
+    # --- Get all unique STANOX codes with valid scheduled calls ---
+    # Filter to rows that have actual scheduled stops (PLANNED_CALLS)
+    valid_stops = subset[subset['PLANNED_CALLS'].notna()].copy()
+    
+    # Also include origin and destination explicitly
+    origin_dest_stops = subset[
+        (subset['STANOX'] == str(origin_code)) | 
+        (subset['STANOX'] == str(destination_code))
+    ].copy()
+    
+    # Combine both
+    all_stops = pd.concat([valid_stops, origin_dest_stops], ignore_index=True)
+    
+    # Get unique STANOX codes
+    stanox_list = all_stops['STANOX'].astype(str).unique().tolist()
+    
+    # Ensure origin and destination are included
     origin_str = str(origin_code)
-    if origin_str in stanox_list:
-        stanox_list.remove(origin_str)
-    stanox_list = [origin_str] + stanox_list
-
-    print(f"✅ Ordered STANOX for first train of the day for service {train_service_code} on OD pair {od_pair} (origin always first):")
-    print(stanox_list)
+    dest_str = str(destination_code)
+    
+    if origin_str not in stanox_list:
+        stanox_list.append(origin_str)
+    if dest_str not in stanox_list:
+        stanox_list.append(dest_str)
+    
+    print(f"✅ Retrieved ALL stations for service {train_service_code} on OD pair {od_pair}")
+    print(f"   Total unique stations: {len(stanox_list)}")
+    print(f"   Stations: {stanox_list}")
     return stanox_list
 
 def map_train_journey_with_incidents(
@@ -3342,36 +1578,88 @@ def map_train_journey_with_incidents(
     incident_color="purple", service_code=None, date_str=None
     ):
     """
-    1. Map each unique incident (INCIDENT_NUMBER, INCIDENT_START_DATETIME) as a numbered marker (chronological index), popup shows incident number, datetime and reason.
-    2. Map service_stanox as the journey sequence, connecting stations with lines.
-    3. For each STANOX, sum all PFPI_MINUTES from provided incident result DataFrames and use color-grading for the marker. Station popups list the chronological incident indices (1,2,3...) that affected them.
+    Map train journey by connecting stations based on GEOGRAPHIC PROXIMITY (not chronological order).
+    
+    1. Map each unique incident (INCIDENT_NUMBER, INCIDENT_START_DATETIME) as a numbered marker
+    2. Map service_stanox stations and connect them using minimum spanning tree based on distance
+    3. Color-grade station markers by total PFPI_MINUTES
+    
+    This creates a clean geographic route by connecting nearby stations, avoiding the "spider web" effect.
+    
+    NEW: Also includes stations from incident_results that experienced delays, ensuring complete route visualization.
     """
     import json
     import folium
     import pandas as pd
+    import numpy as np
+    from scipy.spatial.distance import pdist, squareform
+    from scipy.sparse.csgraph import minimum_spanning_tree
 
     # Load station reference
     with open(stations_ref_path, "r") as f:
         station_ref = json.load(f)
-
-    # Build station coordinates for the service_stanox sequence only
-    stanox_coords = []
+    
+    # Extract additional STANOX codes from incident_results (stations that experienced delays)
+    additional_stanox = set()
+    if incident_results:
+        for res in incident_results:
+            if isinstance(res, pd.DataFrame) and 'STANOX' in res.columns:
+                # Get unique STANOX values from this result
+                stanox_values = res['STANOX'].dropna().unique()
+                for stanox in stanox_values:
+                    # Normalize to string format
+                    stanox_str = str(int(float(stanox))) if isinstance(stanox, (int, float)) else str(stanox)
+                    additional_stanox.add(stanox_str)
+        
+        if additional_stanox:
+            print(f"📍 Found {len(additional_stanox)} additional stations from incident results with delays")
+    
+    # Merge service_stanox with additional stations from incidents
+    # Convert service_stanox to normalized string format
+    service_stanox_normalized = set()
     for s in service_stanox:
+        s_str = str(int(float(s))) if isinstance(s, (int, float)) else str(s)
+        service_stanox_normalized.add(s_str)
+    
+    # Combine both sets
+    all_stanox = service_stanox_normalized.union(additional_stanox)
+    print(f"📊 Total unique stations: {len(all_stanox)}")
+    print(f"   - From service: {len(service_stanox_normalized)}")
+    print(f"   - From incidents: {len(additional_stanox)}")
+    print(f"   - Combined: {len(all_stanox)}")
+
+    # Build station coordinates for all service_stanox stations
+    stanox_coords = []
+    stanox_names = {}
+    
+    # Use the combined all_stanox set instead of just service_stanox
+    for s in all_stanox:
         s_str = str(int(float(s))) if isinstance(s, (int, float)) else str(s)
         match = next((item for item in station_ref if str(item.get("stanox", "")) == s_str), None)
         if match and 'latitude' in match and 'longitude' in match:
             try:
                 lat = float(match['latitude'])
                 lon = float(match['longitude'])
+                station_name = match.get('description', s_str)
                 stanox_coords.append((s_str, lat, lon))
+                stanox_names[s_str] = station_name
             except Exception:
                 continue
+        else:
+            print(f"⚠️ Warning: No coordinates found for STANOX {s_str}")
 
     if not stanox_coords:
-        print("⚠️ No coordinates found for STANOX in this service.")
+        print("⚠️ No coordinates found for any STANOX in this service.")
         return None
 
-    # --- Folium map visualization ---
+    print(f"📍 Found {len(stanox_coords)} stations with coordinates")
+    for i, (stanox, _, _) in enumerate(stanox_coords[:5]):
+        station_name = stanox_names.get(stanox, "Unknown")
+        print(f"   {i+1}. {station_name} ({stanox})")
+    if len(stanox_coords) > 5:
+        print(f"   ... and {len(stanox_coords) - 5} more")
+
+    # --- Create map ---
     mid_lat = sum([lat for _, lat, _ in stanox_coords]) / len(stanox_coords)
     mid_lon = sum([lon for _, _, lon in stanox_coords]) / len(stanox_coords)
     m = folium.Map(location=[mid_lat, mid_lon], zoom_start=8, tiles="CartoDB positron")
@@ -3381,11 +1669,273 @@ def map_train_journey_with_incidents(
         title_html = f"<div style='position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index:9999; font-size:18px; background: white; border:2px solid grey; border-radius:8px; padding: 10px;'><b>Train Service: {service_code}</b><br><b>Date: {date_str}</b></div>"
         m.get_root().html.add_child(folium.Element(title_html))
 
-    # Draw lines between each consecutive station in stanox_coords
-    for i in range(len(stanox_coords) - 1):
-        start = stanox_coords[i][1], stanox_coords[i][2]
-        end = stanox_coords[i+1][1], stanox_coords[i+1][2]
-        folium.PolyLine([start, end], color="blue", weight=4, opacity=0.8).add_to(m)
+    # --- Connect stations by PROXIMITY using Minimum Spanning Tree ---
+    print(f"🔗 Computing route connections based on geographic proximity...")
+    
+    if len(stanox_coords) > 1:
+        # Extract coordinates for distance calculation
+        coords_array = np.array([(lat, lon) for _, lat, lon in stanox_coords])
+        
+        # Compute pairwise distances (Euclidean on lat/lon - approximation)
+        distances = squareform(pdist(coords_array, metric='euclidean'))
+        
+        # Compute minimum spanning tree to connect all stations with minimum total distance
+        mst = minimum_spanning_tree(distances)
+        mst_array = mst.toarray()
+        
+        # Draw edges based on MST
+        edge_count = 0
+        for i in range(len(stanox_coords)):
+            for j in range(i+1, len(stanox_coords)):
+                # Check if there's an edge in MST (symmetric, so check both directions)
+                if mst_array[i, j] > 0 or mst_array[j, i] > 0:
+                    start_stanox, start_lat, start_lon = stanox_coords[i]
+                    end_stanox, end_lat, end_lon = stanox_coords[j]
+                    
+                    start_name = stanox_names.get(start_stanox, start_stanox)
+                    end_name = stanox_names.get(end_stanox, end_stanox)
+                    
+                    folium.PolyLine(
+                        [(start_lat, start_lon), (end_lat, end_lon)],
+                        color="blue",
+                        weight=4,
+                        opacity=0.8,
+                        popup=f"Connection: {start_name} ↔ {end_name}"
+                    ).add_to(m)
+                    edge_count += 1
+        
+        print(f"   ✅ Created {edge_count} route connections based on minimum spanning tree")
+    else:
+        print(f"   ⚠️ Only 1 station, no connections to draw")
+
+    # Prepare list of DataFrames from incident_results
+    dfs = []
+    if incident_results:
+        for res in incident_results:
+            if isinstance(res, pd.DataFrame):
+                dfs.append(res)
+
+    delays_df = pd.concat(dfs, ignore_index=True) if dfs else None
+
+    # Aggregate delays for each STANOX
+    stanox_delay = {}
+    stanox_incidents = {}
+    if delays_df is not None and 'STANOX' in delays_df.columns and 'PFPI_MINUTES' in delays_df.columns:
+        delays_df['PFPI_MINUTES_num'] = pd.to_numeric(delays_df['PFPI_MINUTES'], errors='coerce').fillna(0)
+        if 'INCIDENT_NUMBER' in delays_df.columns:
+            def _norm_inc(x):
+                try:
+                    if pd.isna(x):
+                        return None
+                    xf = float(x)
+                    if xf.is_integer():
+                        return str(int(xf))
+                    else:
+                        return str(x)
+                except Exception:
+                    return str(x)
+            delays_df['INCIDENT_NUMBER_str'] = delays_df['INCIDENT_NUMBER'].apply(_norm_inc)
+        else:
+            delays_df['INCIDENT_NUMBER_str'] = None
+
+        for stanox, group in delays_df.groupby('STANOX'):
+            total_delay = group['PFPI_MINUTES_num'].sum()
+            stanox_delay[str(stanox)] = total_delay
+            if 'INCIDENT_NUMBER_str' in group.columns:
+                unique_incs = sorted([str(v) for v in pd.unique(group['INCIDENT_NUMBER_str'].dropna())])
+            else:
+                unique_incs = []
+            stanox_incidents[str(stanox)] = unique_incs
+
+    # Build chronological ranking for incidents
+    incident_rank = {}
+    if delays_df is not None and 'INCIDENT_NUMBER_str' in delays_df.columns and 'INCIDENT_START_DATETIME' in delays_df.columns:
+        temp = delays_df[['INCIDENT_NUMBER_str', 'INCIDENT_START_DATETIME']].dropna(subset=['INCIDENT_NUMBER_str', 'INCIDENT_START_DATETIME']).drop_duplicates(subset=['INCIDENT_NUMBER_str']).copy()
+        if not temp.empty:
+            temp['INCIDENT_START_dt'] = pd.to_datetime(temp['INCIDENT_START_DATETIME'], errors='coerce')
+            temp = temp.sort_values('INCIDENT_START_dt')
+            temp = temp.reset_index(drop=True)
+            temp['incident_rank'] = temp.index + 1
+            incident_rank = dict(zip(temp['INCIDENT_NUMBER_str'].astype(str), temp['incident_rank'].astype(int)))
+
+    # Color grading function
+    def get_color(delay):
+        try:
+            d = float(delay)
+        except Exception:
+            d = 0
+        if d == 0:
+            return "blue"
+        if d <= 5:
+            return '#32CD32'     # Minor (1-5 min) - Lime Green
+        elif d <= 15:
+            return '#FFD700'     # Moderate (6-15 min) - Gold
+        elif d <= 30:
+            return '#FF8C00'     # Significant (16-30 min) - Dark Orange
+        elif d <= 60:
+            return '#FF0000'     # Major (31-60 min) - Red
+        elif d <= 120:
+            return '#8B0000'     # Severe (61-120 min) - Dark Red
+        else:
+            return '#8A2BE2'     # Critical (120+ min) - Blue Violet
+
+    # Map station markers with color-grading
+    for stanox, lat, lon in stanox_coords:
+        delay_val = stanox_delay.get(stanox, 0)
+        color = get_color(delay_val)
+        station_name = stanox_names.get(stanox, stanox)
+        
+        inc_list = stanox_incidents.get(stanox, [])
+        if inc_list:
+            inc_ranks = [str(incident_rank.get(str(i), i)) for i in inc_list]
+            if len(inc_ranks) > 10:
+                inc_display = ', '.join(inc_ranks[:10]) + f', ... (+{len(inc_ranks)-10} more)'
+            else:
+                inc_display = ', '.join(inc_ranks)
+            incidents_html = f"<br><b>Incidents (by index):</b> {inc_display}"
+        else:
+            incidents_html = ''
+
+        popup_html = f"<b>{station_name}</b><br>STANOX: {stanox}<br>Total delay: {delay_val:.1f} min{incidents_html}"
+        folium.CircleMarker(
+            location=(lat, lon),
+            radius=6,
+            color=color,
+            fill=True,
+            fill_opacity=0.8,
+            popup=folium.Popup(popup_html, max_width=400)
+        ).add_to(m)
+
+    # Map incident markers (same as before)
+    incident_records = pd.concat(dfs, ignore_index=True) if dfs else None
+    
+    if incident_records is not None and 'INCIDENT_NUMBER' in incident_records.columns and 'INCIDENT_START_DATETIME' in incident_records.columns and 'SECTION_CODE' in incident_records.columns:
+        incident_records['INCIDENT_NUMBER_str'] = incident_records['INCIDENT_NUMBER'].apply(lambda x: (str(int(float(x))) if (pd.notna(x) and float(x).is_integer()) else str(x)))
+        incident_unique = incident_records.drop_duplicates(subset=['INCIDENT_NUMBER_str', 'SECTION_CODE']).copy()
+        incident_unique['INCIDENT_START_dt'] = pd.to_datetime(incident_unique['INCIDENT_START_DATETIME'], errors='coerce')
+        
+        incident_durations = {}
+        for inc in incident_records['INCIDENT_NUMBER_str'].unique():
+            subset = incident_records[incident_records['INCIDENT_NUMBER_str'] == inc]
+            start = pd.to_datetime(subset['INCIDENT_START_DATETIME'].min(), format='%Y-%m-%d %H:%M:%S', errors='coerce')
+            end = pd.to_datetime(subset['EVENT_DATETIME'].max(), format='%d-%b-%Y %H:%M', errors='coerce')
+            duration = end - start
+            duration = max(duration, pd.Timedelta(0))
+            incident_durations[inc] = duration
+        
+        section_map = {}
+        for _, row in incident_unique.iterrows():
+            section = str(row['SECTION_CODE'])
+            inc_id = str(row['INCIDENT_NUMBER_str'])
+            inc_num = row.get('INCIDENT_NUMBER')
+            inc_time = row.get('INCIDENT_START_DATETIME')
+            inc_reason = row.get('INCIDENT_REASON') if 'INCIDENT_REASON' in row.index else None
+            rank = incident_rank.get(inc_id)
+            entry = {
+                'inc_id': inc_id,
+                'inc_num': inc_num,
+                'inc_time': inc_time,
+                'inc_reason': inc_reason,
+                'rank': rank if rank is not None else ''
+            }
+            section_map.setdefault(section, []).append(entry)
+
+        print(f"📍 Creating incident markers for {len(section_map)} sections...")
+        markers_created = 0
+        for section_code, entries in section_map.items():
+            entries_sorted = sorted(entries, key=lambda e: (e['rank'] if isinstance(e['rank'], int) else 999999))
+            ranks = [str(e['rank']) if e['rank'] != '' else e['inc_id'] for e in entries_sorted]
+            ranks_display = ','.join(ranks)
+            
+            popup_lines = []
+            for e in entries_sorted:
+                reason_text = e['inc_reason'] if e.get('inc_reason') else 'N/A'
+                dur = incident_durations.get(e['inc_id'], 'N/A')
+                popup_lines.append(f"Incident: {e['inc_num']} — {e['inc_time']} — Reason: {reason_text} — Duration: {dur}")
+            popup_html = '<br>'.join(popup_lines)
+
+            if ':' in section_code:
+                stanox_parts = section_code.split(':')
+                if len(stanox_parts) == 2:
+                    stanox1, stanox2 = stanox_parts[0].strip(), stanox_parts[1].strip()
+                    
+                    match1 = next((item for item in station_ref if str(item.get("stanox", "")) == stanox1), None)
+                    match2 = next((item for item in station_ref if str(item.get("stanox", "")) == stanox2), None)
+                    
+                    if match1 and match2 and 'latitude' in match1 and 'longitude' in match1 and 'latitude' in match2 and 'longitude' in match2:
+                        lat1, lon1 = float(match1['latitude']), float(match1['longitude'])
+                        lat2, lon2 = float(match2['latitude']), float(match2['longitude'])
+                        
+                        station1_name = match1.get('description', stanox1)
+                        station2_name = match2.get('description', stanox2)
+                        
+                        folium.PolyLine(
+                            [(lat1, lon1), (lat2, lon2)],
+                            color=incident_color,
+                            weight=6,
+                            opacity=0.9,
+                            popup=f"Incident Section: {station1_name} ↔ {station2_name}"
+                        ).add_to(m)
+                        
+                        mid_lat = (lat1 + lat2) / 2
+                        mid_lon = (lon1 + lon2) / 2
+                        
+                        section_popup = f"<b>Track Section Incident</b><br>Between: {station1_name} ↔ {station2_name}<br>Section: {section_code}<br><br>{popup_html}"
+                        
+                        size_px = max(28, min(80, 12 * len(ranks_display)))
+                        number_html = f"<div style='background:{incident_color};color:#fff;border-radius:50%;min-width:{size_px}px;height:{size_px}px;display:inline-flex;align-items:center;justify-content:center;font-weight:bold;border:2px solid #ffffff;padding:4px'>{ranks_display}</div>"
+                        folium.Marker(
+                            location=(mid_lat, mid_lon),
+                            icon=folium.DivIcon(html=number_html),
+                            popup=folium.Popup(section_popup, max_width=450)
+                        ).add_to(m)
+                        markers_created += 1
+            else:
+                match = next((item for item in station_ref if str(item.get("stanox", "")) == section_code), None)
+                if match and 'latitude' in match and 'longitude' in match:
+                    lat = float(match['latitude']) + 0.0005
+                    lon = float(match['longitude']) + 0.0005
+                    station_name = match.get('description', section_code)
+                    
+                    station_popup = f"<b>Station Incident</b><br>{station_name}<br>STANOX: {section_code}<br><br>{popup_html}"
+                    
+                    size_px = max(28, min(80, 12 * len(ranks_display)))
+                    number_html = f"<div style='background:{incident_color};color:#fff;border-radius:50%;min-width:{size_px}px;height:{size_px}px;display:inline-flex;align-items:center;justify-content:center;font-weight:bold;border:2px solid #ffffff;padding:4px'>{ranks_display}</div>"
+                    folium.Marker(
+                        location=(lat, lon),
+                        icon=folium.DivIcon(html=number_html),
+                        popup=folium.Popup(station_popup, max_width=450)
+                    ).add_to(m)
+                    markers_created += 1
+        
+        print(f"✅ Created {markers_created} incident markers on map")
+
+    # Add legend
+    legend_html = '''
+     <div style="position: fixed; bottom: 50px; left: 50px; width: 300px; height: auto; max-height: 400px; z-index:9999; font-size:13px; background: white; border:2px solid grey; border-radius:8px; padding: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.3);">
+     <b style="font-size: 15px;">Delay Intensity Key</b><br>
+     <div style="margin: 8px 0;">
+     <i class="fa fa-circle" style="color:blue"></i> 0 min (No delay)<br>
+     <i class="fa fa-circle" style="color:#32CD32"></i> 1-5 min (Minor)<br>
+     <i class="fa fa-circle" style="color:#FFD700"></i> 6-15 min (Moderate)<br>
+     <i class="fa fa-circle" style="color:#FF8C00"></i> 16-30 min (Significant)<br>
+     <i class="fa fa-circle" style="color:#FF0000"></i> 31-60 min (Major)<br>
+     <i class="fa fa-circle" style="color:#8B0000"></i> 61-120 min (Severe)<br>
+     <i class="fa fa-circle" style="color:#8A2BE2"></i> 120+ min (Critical)
+     </div>
+     <b style="font-size: 14px;">Route Connections:</b><br>
+     <div style="margin-top: 6px; line-height: 1.4;">
+     Blue lines connect stations by <b>geographic proximity</b> using minimum spanning tree algorithm.<br><br>
+     Purple numbered circles show incidents (1 = earliest).<br>
+     Track section incidents shown as purple lines.
+     </div>
+     </div>
+     '''
+    m.get_root().html.add_child(folium.Element(legend_html))
+
+    folium.LayerControl().add_to(m)
+    print("✅ Map created with proximity-based connections!")
+    return m
 
     # Prepare list of DataFrames from incident_results
     dfs = []
@@ -3464,6 +2014,8 @@ def map_train_journey_with_incidents(
     for stanox, lat, lon in stanox_coords:
         delay_val = stanox_delay.get(stanox, 0)
         color = get_color(delay_val)
+        station_name = stanox_names.get(stanox, stanox)
+        
         # Prepare ranked incident list for popup, truncate if long
         inc_list = stanox_incidents.get(stanox, [])
         if inc_list:
@@ -3477,7 +2029,7 @@ def map_train_journey_with_incidents(
         else:
             incidents_html = ''
 
-        popup_html = f"<b>STANOX {stanox}</b><br>Total delay: {delay_val:.1f} min{incidents_html}"
+        popup_html = f"<b>{station_name}</b><br>STANOX: {stanox}<br>Total delay: {delay_val:.1f} min{incidents_html}"
         folium.CircleMarker(
             location=(lat, lon),
             radius=6,
@@ -3489,6 +2041,19 @@ def map_train_journey_with_incidents(
 
     # Map unique incidents aggregated by SECTION_CODE: create one numbered marker per location with all incident ranks
     incident_records = pd.concat(dfs, ignore_index=True) if dfs else None
+    
+    print(f"🔍 Debug: Checking for incident markers...")
+    print(f"   - incident_records is None: {incident_records is None}")
+    if incident_records is not None:
+        print(f"   - incident_records shape: {incident_records.shape}")
+        print(f"   - incident_records columns: {incident_records.columns.tolist()}")
+        print(f"   - Has INCIDENT_NUMBER: {'INCIDENT_NUMBER' in incident_records.columns}")
+        print(f"   - Has INCIDENT_START_DATETIME: {'INCIDENT_START_DATETIME' in incident_records.columns}")
+        print(f"   - Has SECTION_CODE: {'SECTION_CODE' in incident_records.columns}")
+        if 'INCIDENT_NUMBER' in incident_records.columns:
+            unique_incidents = incident_records['INCIDENT_NUMBER'].dropna().unique()
+            print(f"   - Unique incidents found: {unique_incidents}")
+    
     if incident_records is not None and 'INCIDENT_NUMBER' in incident_records.columns and 'INCIDENT_START_DATETIME' in incident_records.columns and 'SECTION_CODE' in incident_records.columns:
         # Normalize incident id string
         incident_records['INCIDENT_NUMBER_str'] = incident_records['INCIDENT_NUMBER'].apply(lambda x: (str(int(float(x))) if (pd.notna(x) and float(x).is_integer()) else str(x)))
@@ -3524,6 +2089,8 @@ def map_train_journey_with_incidents(
             section_map.setdefault(section, []).append(entry)
 
         # For each section, sort entries by rank (if available) then plot a single numbered marker showing combined ranks
+        print(f"📍 Creating incident markers for {len(section_map)} sections...")
+        markers_created = 0
         for section_code, entries in section_map.items():
             # sort by rank where possible
             entries_sorted = sorted(entries, key=lambda e: (e['rank'] if isinstance(e['rank'], int) else 999999))
@@ -3537,32 +2104,106 @@ def map_train_journey_with_incidents(
                 popup_lines.append(f"Incident: {e['inc_num']} — {e['inc_time']} — Reason: {reason_text} — Duration: {dur}")
             popup_html = '<br>'.join(popup_lines)
 
-            # find coords for this section_code
-            match = next((item for item in station_ref if str(item.get("stanox", "")) == section_code), None)
-            if match and 'latitude' in match and 'longitude' in match:
-                lat = float(match['latitude']) + 0.0005  # Small offset to avoid overlap with station markers
-                lon = float(match['longitude']) + 0.0005  # Small offset to avoid overlap with station markers
-                # adjust DivIcon size based on text length
-                size_px = max(28, min(80, 12 * len(ranks_display)))
-                number_html = f"<div style='background:{incident_color};color:#fff;border-radius:50%;min-width:{size_px}px;height:{size_px}px;display:inline-flex;align-items:center;justify-content:center;font-weight:bold;border:2px solid #ffffff;padding:4px'>{ranks_display}</div>"
-                folium.Marker(
-                    location=(lat, lon),
-                    icon=folium.DivIcon(html=number_html),
-                    popup=folium.Popup(popup_html, max_width=400)
-                ).add_to(m)
+            # Check if section_code contains a colon (track section between two stations)
+            if ':' in section_code:
+                # Parse the two STANOX codes
+                stanox_parts = section_code.split(':')
+                if len(stanox_parts) == 2:
+                    stanox1, stanox2 = stanox_parts[0].strip(), stanox_parts[1].strip()
+                    
+                    # Find coordinates for both stations
+                    match1 = next((item for item in station_ref if str(item.get("stanox", "")) == stanox1), None)
+                    match2 = next((item for item in station_ref if str(item.get("stanox", "")) == stanox2), None)
+                    
+                    if match1 and match2 and 'latitude' in match1 and 'longitude' in match1 and 'latitude' in match2 and 'longitude' in match2:
+                        lat1, lon1 = float(match1['latitude']), float(match1['longitude'])
+                        lat2, lon2 = float(match2['latitude']), float(match2['longitude'])
+                        
+                        station1_name = match1.get('description', stanox1)
+                        station2_name = match2.get('description', stanox2)
+                        
+                        # Draw purple line between the two stations
+                        folium.PolyLine(
+                            [(lat1, lon1), (lat2, lon2)],
+                            color=incident_color,
+                            weight=6,
+                            opacity=0.9,
+                            popup=f"Incident Section: {station1_name} ↔ {station2_name}"
+                        ).add_to(m)
+                        
+                        # Calculate midpoint for marker placement
+                        mid_lat = (lat1 + lat2) / 2
+                        mid_lon = (lon1 + lon2) / 2
+                        
+                        # Adjust popup to show section information
+                        section_popup = f"<b>Track Section Incident</b><br>Between: {station1_name} ↔ {station2_name}<br>Section: {section_code}<br><br>{popup_html}"
+                        
+                        # Create numbered marker at midpoint
+                        size_px = max(28, min(80, 12 * len(ranks_display)))
+                        number_html = f"<div style='background:{incident_color};color:#fff;border-radius:50%;min-width:{size_px}px;height:{size_px}px;display:inline-flex;align-items:center;justify-content:center;font-weight:bold;border:2px solid #ffffff;padding:4px'>{ranks_display}</div>"
+                        folium.Marker(
+                            location=(mid_lat, mid_lon),
+                            icon=folium.DivIcon(html=number_html),
+                            popup=folium.Popup(section_popup, max_width=450)
+                        ).add_to(m)
+                        markers_created += 1
+                        if markers_created <= 3:
+                            print(f"   ✅ Section marker {markers_created}: {station1_name} ↔ {station2_name}, Rank(s) {ranks_display}")
+                    else:
+                        if not match1:
+                            print(f"   ⚠️ No coordinates found for station {stanox1} in section {section_code}")
+                        if not match2:
+                            print(f"   ⚠️ No coordinates found for station {stanox2} in section {section_code}")
+                else:
+                    print(f"   ⚠️ Invalid section format: {section_code}")
+            else:
+                # Single station section (original logic)
+                match = next((item for item in station_ref if str(item.get("stanox", "")) == section_code), None)
+                if match and 'latitude' in match and 'longitude' in match:
+                    lat = float(match['latitude']) + 0.0005  # Small offset to avoid overlap with station markers
+                    lon = float(match['longitude']) + 0.0005  # Small offset to avoid overlap with station markers
+                    station_name = match.get('description', section_code)
+                    
+                    # Adjust popup to show station name
+                    station_popup = f"<b>Station Incident</b><br>{station_name}<br>STANOX: {section_code}<br><br>{popup_html}"
+                    
+                    # adjust DivIcon size based on text length
+                    size_px = max(28, min(80, 12 * len(ranks_display)))
+                    number_html = f"<div style='background:{incident_color};color:#fff;border-radius:50%;min-width:{size_px}px;height:{size_px}px;display:inline-flex;align-items:center;justify-content:center;font-weight:bold;border:2px solid #ffffff;padding:4px'>{ranks_display}</div>"
+                    folium.Marker(
+                        location=(lat, lon),
+                        icon=folium.DivIcon(html=number_html),
+                        popup=folium.Popup(station_popup, max_width=450)
+                    ).add_to(m)
+                    markers_created += 1
+                    if markers_created <= 3:
+                        print(f"   ✅ Station marker {markers_created}: {station_name}, Rank(s) {ranks_display}")
+                else:
+                    print(f"   ⚠️ No coordinates found for section {section_code}")
+        
+        print(f"✅ Created {markers_created} incident markers on map")
+    else:
+        print("⚠️ No incident data available for markers (missing columns or empty data)")
 
     # --- Add legend/key for color grading matching incident_view_heatmap_html ---
     legend_html = '''
-     <div style="position: fixed; bottom: 100px; left: 50px; width: 260px; height: 170px; z-index:9999; font-size:14px; background: white; border:2px solid grey; border-radius:8px; padding: 10px;">
-     <b>Delay Intensity Key</b><br>
+     <div style="position: fixed; bottom: 50px; left: 50px; width: 300px; height: auto; max-height: 400px; z-index:9999; font-size:13px; background: white; border:2px solid grey; border-radius:8px; padding: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.3);">
+     <b style="font-size: 15px;">Delay Intensity Key</b><br>
+     <div style="margin: 8px 0;">
      <i class="fa fa-circle" style="color:blue"></i> 0 min (No delay)<br>
      <i class="fa fa-circle" style="color:#32CD32"></i> 1-5 min (Minor)<br>
      <i class="fa fa-circle" style="color:#FFD700"></i> 6-15 min (Moderate)<br>
      <i class="fa fa-circle" style="color:#FF8C00"></i> 16-30 min (Significant)<br>
      <i class="fa fa-circle" style="color:#FF0000"></i> 31-60 min (Major)<br>
      <i class="fa fa-circle" style="color:#8B0000"></i> 61-120 min (Severe)<br>
-     <i class="fa fa-circle" style="color:#8A2BE2"></i> 120+ min (Critical)<br>
-     <br><b>Incident markers:</b> numbered by chronological order (1 = earliest). Multiple ranks at same location shown as comma-separated list.<br>
+     <i class="fa fa-circle" style="color:#8A2BE2"></i> 120+ min (Critical)
+     </div>
+     <b style="font-size: 14px;">Incident Markers:</b><br>
+     <div style="margin-top: 6px; line-height: 1.4;">
+     Purple numbered circles show incidents in chronological order (1 = earliest).<br>
+     Track section incidents shown as <span style="color:purple; font-weight:bold;">purple lines</span> with marker at midpoint.<br>
+     Multiple incidents: comma-separated ranks.
+     </div>
      </div>
      '''
     m.get_root().html.add_child(folium.Element(legend_html))
@@ -3579,6 +2220,8 @@ def train_view_2(all_data, service_stanox, service_code, stations_ref_path=r"C:\
     OnTime% is computed on the original PFPI distribution (<=0) so it still reflects punctuality.
 
     Returns a DataFrame with columns: ServiceCode, StationName, MeanDelay, DelayVariance, OnTime%, IncidentCount
+    
+    NEW: Also includes stations from all_data that experienced delays for this service code.
     """
     import json
     import pandas as pd
@@ -3591,10 +2234,38 @@ def train_view_2(all_data, service_stanox, service_code, stations_ref_path=r"C:\
         stanox_to_name = {str(item.get("stanox", "")): (item.get("description") or item.get("name") or str(item.get("stanox",""))) for item in station_ref}
     except Exception:
         stanox_to_name = {}
+    
+    # Extract additional STANOX codes from all_data that have delays for this service code
+    service_data = all_data[all_data['TRAIN_SERVICE_CODE'].astype(str) == str(service_code)].copy()
+    additional_stanox = set()
+    
+    if not service_data.empty and 'STANOX' in service_data.columns and 'PFPI_MINUTES' in service_data.columns:
+        # Get stations with delays (PFPI_MINUTES > 0)
+        service_data['PFPI_MINUTES_num'] = pd.to_numeric(service_data['PFPI_MINUTES'], errors='coerce')
+        delayed_stations = service_data[service_data['PFPI_MINUTES_num'] > 0]['STANOX'].dropna().unique()
+        
+        for stanox in delayed_stations:
+            stanox_str = str(int(float(stanox))) if isinstance(stanox, (int, float)) else str(stanox)
+            additional_stanox.add(stanox_str)
+        
+        if additional_stanox:
+            print(f"📍 Found {len(additional_stanox)} additional stations with delays for service {service_code}")
+    
+    # Merge service_stanox with additional stations
+    service_stanox_normalized = set()
+    for s in service_stanox:
+        s_str = str(int(float(s))) if isinstance(s, (int, float)) else str(s)
+        service_stanox_normalized.add(s_str)
+    
+    all_stanox = service_stanox_normalized.union(additional_stanox)
+    print(f"📊 Total unique stations for analysis: {len(all_stanox)}")
+    print(f"   - From service route: {len(service_stanox_normalized)}")
+    print(f"   - With delays: {len(additional_stanox)}")
+    print(f"   - Combined: {len(all_stanox)}")
 
     results = []
 
-    for s in service_stanox:
+    for s in all_stanox:
         # Filter data for this STANOX and service code
         subset = all_data[
             (all_data['STANOX'] == str(s)) &
@@ -3631,6 +2302,8 @@ def train_view_2(all_data, service_stanox, service_code, stations_ref_path=r"C:\
 def plot_reliability_graphs(all_data, service_stanox, service_code, stations_ref_path=r"C:\Users\39342\University of Glasgow\Ji-Eun Byun - MZ-JB\MSci (Research) 2024-25\reference data\stations_ref_with_dft.json", cap_minutes=75):
     """
     Generate overlapping density (KDE) curves and cumulative distribution plots: Delay distribution per station (all curves overlapping, different colours), excluding delay==0.0 and capped at cap_minutes.
+    
+    NEW: Also includes stations from all_data that experienced delays for this service code.
     """
     import matplotlib.pyplot as plt
     import numpy as np
@@ -3644,11 +2317,36 @@ def plot_reliability_graphs(all_data, service_stanox, service_code, stations_ref
         stanox_to_name = {str(item.get('stanox','')): item.get('description') or item.get('name') or str(item.get('stanox','')) for item in station_ref}
     except Exception:
         stanox_to_name = {}
+    
+    # Extract additional STANOX codes from all_data that have delays for this service code
+    service_data = all_data[all_data['TRAIN_SERVICE_CODE'].astype(str) == str(service_code)].copy()
+    additional_stanox = set()
+    
+    if not service_data.empty and 'STANOX' in service_data.columns and 'PFPI_MINUTES' in service_data.columns:
+        # Get stations with delays (PFPI_MINUTES > 0)
+        service_data['PFPI_MINUTES_num'] = pd.to_numeric(service_data['PFPI_MINUTES'], errors='coerce')
+        delayed_stations = service_data[service_data['PFPI_MINUTES_num'] > 0]['STANOX'].dropna().unique()
+        
+        for stanox in delayed_stations:
+            stanox_str = str(int(float(stanox))) if isinstance(stanox, (int, float)) else str(stanox)
+            additional_stanox.add(stanox_str)
+        
+        if additional_stanox:
+            print(f"📍 Found {len(additional_stanox)} additional stations with delays for plotting")
+    
+    # Merge service_stanox with additional stations
+    service_stanox_normalized = set()
+    for s in service_stanox:
+        s_str = str(int(float(s))) if isinstance(s, (int, float)) else str(s)
+        service_stanox_normalized.add(s_str)
+    
+    all_stanox = service_stanox_normalized.union(additional_stanox)
+    print(f"📊 Plotting delay distributions for {len(all_stanox)} stations")
 
     station_labels = []
     delay_data = []
 
-    for s in service_stanox:
+    for s in all_stanox:
         subset = all_data[
             (all_data['STANOX'] == str(s)) &
             (all_data['TRAIN_SERVICE_CODE'].astype(str) == str(service_code))
@@ -3852,3 +2550,841 @@ def create_time_view_html(date_str, all_data):
     output_file = f"time_view_{date_str.replace('-', '_')}.html"
     m.save(output_file)
     print(f"Map saved to {output_file}")
+
+
+# functions for station view
+
+def station_view_yearly(station_id, interval_minutes=30):
+    """
+    Station analysis for yearly data across all incidents - simplified output.
+    Analyzes all days of the week for a station and separates incident vs normal operations.
+    """
+    
+    # Load data from all day files
+    processed_base = '../processed_data'
+    station_folder = os.path.join(processed_base, station_id)
+    
+    if not os.path.exists(station_folder):
+        print(f"Station folder not found: {station_folder}")
+        return None, None
+    
+    # Define day files to load
+    day_files = ['MO.parquet', 'TU.parquet', 'WE.parquet', 'TH.parquet', 'FR.parquet', 'SA.parquet', 'SU.parquet']
+    
+    all_station_data = []
+    
+    for day_file in day_files:
+        file_path = os.path.join(station_folder, day_file)
+        if os.path.exists(file_path):
+            try:
+                day_data = pd.read_parquet(file_path, engine='fastparquet')
+                day_data['day_of_week'] = day_file.replace('.parquet', '')
+                all_station_data.append(day_data)
+                print(f"Loaded {len(day_data)} records from {day_file}")
+            except Exception as e:
+                print(f"Error loading {day_file}: {e}")
+        else:
+            print(f"File not found: {day_file}")
+    
+    if not all_station_data:
+        print("No data files found for this station")
+        return None, None
+    
+    # Combine all data
+    combined_data = pd.concat(all_station_data, ignore_index=True)
+    print(f"Total combined records: {len(combined_data)}")
+    
+    # Filter for trains with planned calls
+    train_mask = combined_data['PLANNED_CALLS'].notna()
+    all_train_data = combined_data[train_mask].copy()
+    
+    # Maximum delay deduplication
+    if len(all_train_data) > 0:
+        all_train_data['delay_numeric'] = pd.to_numeric(all_train_data['PFPI_MINUTES'], errors='coerce').fillna(0)
+        all_train_data['dedup_priority'] = all_train_data['delay_numeric'] * 1000
+        
+        if 'ACTUAL_CALLS' in all_train_data.columns:
+            all_train_data['dedup_priority'] += all_train_data['ACTUAL_CALLS'].notna().astype(int) * 100
+        
+        basic_dedup_cols = ['TRAIN_SERVICE_CODE', 'PLANNED_CALLS', 'day_of_week']
+        basic_available = [col for col in basic_dedup_cols if col in all_train_data.columns]
+        
+        if len(basic_available) >= 2:
+            all_train_data = all_train_data.sort_values(['delay_numeric', 'dedup_priority'], ascending=[False, False])
+            all_train_data = all_train_data.drop_duplicates(subset=basic_available, keep='first')
+            all_train_data = all_train_data.drop(['delay_numeric', 'dedup_priority'], axis=1)
+    
+    if len(all_train_data) == 0:
+        return None, None
+    
+    # Separate incident and normal operations
+    # Assume trains with incident codes are incident-related
+    incident_mask = all_train_data['INCIDENT_NUMBER'].notna()
+    incident_data = all_train_data[incident_mask].copy()
+    normal_data = all_train_data[~incident_mask].copy()
+    
+    print(f"Incident-related records: {len(incident_data)}")
+    print(f"Normal operations records: {len(normal_data)}")
+    
+    def process_operations_data(data, operation_type):
+        """Process data for either incident or normal operations"""
+        if len(data) == 0:
+            return pd.DataFrame()
+        
+        # Process times - using a reference date for time parsing
+        reference_date = datetime(2024, 1, 1)  # Use a standard reference date
+        
+        def parse_time_simple(time_val, base_date):
+            if pd.isna(time_val):
+                return None
+            try:
+                time_str = str(int(time_val)).zfill(4)
+                hour = int(time_str[:2])
+                minute = int(time_str[2:])
+                return base_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            except:
+                return None
+        
+        # Parse times and apply corrected timing logic
+        data['planned_dt'] = data['PLANNED_CALLS'].apply(
+            lambda x: parse_time_simple(x, reference_date))
+        data['original_actual_dt'] = data['ACTUAL_CALLS'].apply(
+            lambda x: parse_time_simple(x, reference_date))
+        data['delay_minutes'] = pd.to_numeric(data['PFPI_MINUTES'], errors='coerce').fillna(0)
+        
+        # Create corrected actual times
+        corrected_actual_times = []
+        for _, row in data.iterrows():
+            planned_dt = row['planned_dt']
+            original_actual_dt = row['original_actual_dt']
+            delay_min = row['delay_minutes']
+            
+            if pd.isna(planned_dt):
+                corrected_actual_times.append(None)
+                continue
+                
+            if delay_min > 0:
+                corrected_actual = planned_dt + timedelta(minutes=delay_min)
+                corrected_actual_times.append(corrected_actual)
+            elif delay_min == 0:
+                corrected_actual_times.append(planned_dt)
+            else:
+                if pd.notna(original_actual_dt):
+                    corrected_actual_times.append(original_actual_dt)
+                else:
+                    corrected_actual_times.append(planned_dt)
+        
+        data['effective_time'] = corrected_actual_times
+        valid_data = data[data['effective_time'].notna()].copy()
+        
+        if len(valid_data) == 0:
+            return pd.DataFrame()
+        
+        # Group by time intervals (using hour of day for grouping)
+        valid_data['hour_of_day'] = valid_data['effective_time'].dt.hour
+        valid_data['interval_group'] = (valid_data['hour_of_day'] * 60 + valid_data['effective_time'].dt.minute) // interval_minutes
+        
+        intervals = []
+        
+        for interval_group in valid_data['interval_group'].unique():
+            interval_trains = valid_data[valid_data['interval_group'] == interval_group]
+            
+            if len(interval_trains) > 0:
+                arrival_trains = interval_trains[interval_trains['EVENT_TYPE'] != 'C']
+                cancellation_trains = interval_trains[interval_trains['EVENT_TYPE'] == 'C']
+                
+                if len(arrival_trains) > 0 or len(cancellation_trains) > 0:
+                    if len(arrival_trains) > 0:
+                        delay_values = arrival_trains['delay_minutes'].tolist()
+                        ontime_arrivals = len([d for d in delay_values if d == 0.0])
+                        delayed_arrivals = len([d for d in delay_values if d > 0.0])
+                        delayed_minutes = [round(d, 1) for d in delay_values if d > 0.0]
+                    else:
+                        ontime_arrivals = 0
+                        delayed_arrivals = 0
+                        delayed_minutes = []
+                    
+                    total_cancellations = len(cancellation_trains)
+                    
+                    # Calculate time period label
+                    start_minute = interval_group * interval_minutes
+                    end_minute = start_minute + interval_minutes
+                    start_hour = start_minute // 60
+                    start_min = start_minute % 60
+                    end_hour = end_minute // 60
+                    end_min = end_minute % 60
+                    
+                    intervals.append({
+                        'time_period': f"{start_hour:02d}:{start_min:02d}-{end_hour:02d}:{end_min:02d}",
+                        'ontime_arrival_count': ontime_arrivals,
+                        'delayed_arrival_count': delayed_arrivals,
+                        'cancellation_count': total_cancellations,
+                        'delay_minutes': delayed_minutes,
+                        'operation_type': operation_type
+                    })
+        
+        return pd.DataFrame(intervals)
+    
+    # Process both incident and normal operations
+    incident_summary = process_operations_data(incident_data, 'incident')
+    normal_summary = process_operations_data(normal_data, 'normal')
+    
+    return incident_summary, normal_summary
+
+print("station_view_yearly function ready!")
+
+def plot_arrival_hour_distributions_violin(station_id, all_data):
+    """
+    Create KDE plots comparing planned vs actual arrival times for trains affected by incidents.
+    
+    - Uses only trains that were affected by incidents (INCIDENT_NUMBER not null)
+    - Normal: Shows planned arrival times for these trains
+    - Incident: Shows actual arrival times (planned + delay) for the same trains
+    - Same number of trains in both distributions, showing the time shift due to incidents
+    - Only includes trains that arrived (EVENT_TYPE != 'C')
+    - Preserves granular minute-level data
+    - Shows density on y-axis with time on x-axis
+    
+    Parameters:
+    -----------
+    station_id : str
+        The station STANOX code
+    all_data : pd.DataFrame
+        The complete dataset containing all train records
+    """
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import pandas as pd
+    import numpy as np
+
+    # Set style
+    plt.style.use('default')
+    sns.set_palette("husl")
+
+    print(f"🚀 CREATING ARRIVAL TIME SHIFT ANALYSIS FOR INCIDENT TRAINS AT STATION {station_id}")
+    print("=" * 70)
+
+    # Filter data for the specific station from provided all_data
+    data = all_data[all_data['STANOX'] == str(station_id)].copy()
+    if len(data) == 0:
+        print(f"No data found for station {station_id}")
+        return None
+    
+    print(f"Loaded {len(data)} total records for station {station_id}")
+
+    # Filter for trains affected by incidents
+    incident_data = data[data['INCIDENT_NUMBER'].notna()].copy()
+    if len(incident_data) == 0:
+        print("No incident data found for this station.")
+        return None
+    
+    # Filter for trains that arrived (exclude cancellations)
+    arrived_incident_data = incident_data[incident_data['EVENT_TYPE'] != 'C'].copy()
+    if len(arrived_incident_data) == 0:
+        print("No arrived incident trains found.")
+        return None
+    
+    print(f"Analyzing {len(arrived_incident_data)} incident trains that arrived")
+
+    # Helper function to convert HHMM to minutes past midnight
+    def hhmm_to_minutes(hhmm):
+        if pd.isna(hhmm):
+            return np.nan
+        try:
+            hhmm_str = str(int(hhmm)).zfill(4)
+            hour = int(hhmm_str[:2])
+            minute = int(hhmm_str[2:])
+            return hour * 60 + minute
+        except:
+            return np.nan
+
+    # Calculate delays
+    arrived_incident_data['delay_minutes'] = pd.to_numeric(arrived_incident_data['PFPI_MINUTES'], errors='coerce').fillna(0)
+    
+    # Calculate planned arrival times in minutes
+    arrived_incident_data['planned_minutes'] = arrived_incident_data['PLANNED_CALLS'].apply(hhmm_to_minutes)
+    
+    # Calculate actual arrival times in minutes (planned + delay)
+    arrived_incident_data['actual_minutes'] = arrived_incident_data['planned_minutes'] + arrived_incident_data['delay_minutes']
+    arrived_incident_data['actual_minutes'] = arrived_incident_data['actual_minutes'] % (24 * 60)  # Keep within 24 hours
+    
+    # Drop rows with missing times
+    valid_data = arrived_incident_data.dropna(subset=['planned_minutes', 'actual_minutes']).copy()
+    
+    if len(valid_data) == 0:
+        print("No valid time data after cleaning.")
+        return None
+    
+    print(f"Valid data for {len(valid_data)} trains")
+
+    # Prepare data for plotting
+    plot_data = []
+    
+    # Normal: planned arrival times
+    planned_times = valid_data['planned_minutes'].values
+    plot_data.extend([{'arrival_minutes': m, 'condition': 'Planned (Normal)'} for m in planned_times])
+    
+    # Incident: actual arrival times
+    actual_times = valid_data['actual_minutes'].values
+    plot_data.extend([{'arrival_minutes': m, 'condition': 'Actual (Incident)'} for m in actual_times])
+    
+    plot_df = pd.DataFrame(plot_data)
+    
+    # Format times as HH:MM
+    def minutes_to_hhmm(minutes):
+        hours = int(minutes // 60)
+        mins = int(minutes % 60)
+        return f"{hours:02d}:{mins:02d}"
+
+    # Create figure with subplots
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 12), gridspec_kw={'height_ratios': [2, 1]})
+    
+    # Main KDE plot (top subplot)
+    sns.kdeplot(data=[d['arrival_minutes'] for d in plot_data if d['condition'] == 'Planned (Normal)'], 
+                ax=ax1, fill=True, alpha=0.5, color='lightgreen', 
+                label=f'Planned (n={len(valid_data)})', bw_adjust=0.6)
+    
+    sns.kdeplot(data=[d['arrival_minutes'] for d in plot_data if d['condition'] == 'Actual (Incident)'], 
+                ax=ax1, fill=True, alpha=0.5, color='lightcoral', 
+                label=f'Actual (n={len(valid_data)})', bw_adjust=0.6)
+
+    ax1.set_title(f'Arrival Time Distribution Shift Due to Incidents\nStation {station_id}',
+                 fontsize=20, fontweight='bold')
+    ax1.set_xlabel('')  # Remove x-label for top plot
+    ax1.set_ylabel('Density', fontsize=20)
+    ax1.set_xlim(-10, 24*60 + 10)  # Full 24 hours in minutes
+    ax1.grid(True, alpha=0.3, axis='both')
+    
+    # Add hour labels on x-axis
+    hour_ticks = np.arange(0, 24*60 + 1, 60)  # Every hour
+    hour_labels = [f"{h//60:02d}:00" for h in hour_ticks]
+    ax1.set_xticks(hour_ticks)
+    ax1.set_xticklabels(hour_labels)
+    
+    # Add legend
+    ax1.legend(loc='upper right', fontsize=15)
+    
+    # Delay distribution plot (bottom subplot) - density of delays
+    delay_minutes = valid_data['delay_minutes'].values
+    ax2.hist(delay_minutes, bins=30, alpha=0.7, color='skyblue', edgecolor='black', linewidth=0.5, density=True)
+    ax2.set_title('Delay Distribution Density', fontsize=16, fontweight='bold')
+    ax2.set_xlabel('Delay (minutes)', fontsize=16)
+    ax2.set_ylabel('Density', fontsize=16)
+    ax2.grid(True, alpha=0.3, axis='both')
+    
+    # Add vertical line at mean delay
+    mean_delay = np.mean(delay_minutes)
+    ax2.axvline(mean_delay, color='red', linestyle='--', linewidth=2, 
+                label=f'Mean: {mean_delay:.1f} min')
+    ax2.legend(loc='upper right', fontsize=12)
+
+    plt.tight_layout()
+    
+    # Print summary statistics
+    print(f"\n{'='*80}")
+    print(f"📊 STATION {station_id} INCIDENT TRAIN ARRIVAL TIME SHIFT ANALYSIS")
+    print(f"{'='*80}")
+    print(f"Analyzing {len(valid_data)} trains affected by incidents")
+    print(f"Std planned times: {valid_data['planned_minutes'].std():.1f} minutes")
+    print(f"Std actual times: {valid_data['actual_minutes'].std():.1f} minutes")
+    print(f"Min planned time: {valid_data['planned_minutes'].min():.0f} minutes ({minutes_to_hhmm(valid_data['planned_minutes'].min())})")
+    print(f"Max planned time: {valid_data['planned_minutes'].max():.0f} minutes ({minutes_to_hhmm(valid_data['planned_minutes'].max())})")
+    print(f"Min actual time: {valid_data['actual_minutes'].min():.0f} minutes ({minutes_to_hhmm(valid_data['actual_minutes'].min())})")
+    print(f"Max actual time: {valid_data['actual_minutes'].max():.0f} minutes ({minutes_to_hhmm(valid_data['actual_minutes'].max())})")
+    
+    # Delay statistics
+    delay_stats = valid_data['delay_minutes'].describe()
+    print(f"\n🚨 DELAY STATISTICS:")
+    print(f"Mean delay: {delay_stats['mean']:.1f} minutes")
+    print(f"Median delay: {delay_stats['50%']:.1f} minutes")
+    print(f"Max delay: {delay_stats['max']:.1f} minutes")
+    print(f"Std delay: {delay_stats['std']:.1f} minutes")
+    print(f"Trains with delay > 0: {len(valid_data[valid_data['delay_minutes'] > 0])} ({100*len(valid_data[valid_data['delay_minutes'] > 0])/len(valid_data):.1f}%)")
+    print(f"Trains on time: {len(valid_data[valid_data['delay_minutes'] == 0])} ({100*len(valid_data[valid_data['delay_minutes'] == 0])/len(valid_data):.1f}%)")
+    
+    plt.show()
+    return plot_df
+
+print("plot_arrival_hour_distributions_violin function ready!")
+
+
+def plot_variable_relationships(station_id, all_data, time_window_minutes=60, num_platforms=12, figsize=(14, 10), max_delay_percentile=98):
+    """
+    Create scatter plots showing relationship between flow and delays - ONE POINT PER HOUR.
+    Separates analysis into WEEKDAYS (Mon-Fri) and WEEKENDS (Sat-Sun).
+
+    Flow vs Mean Delay (minutes) - Y: flow, X: mean delay
+
+    IMPORTANT: 
+    - Flow is calculated using ALL trains (incident and non-incident) per hour.
+    - Mean delay is calculated ONLY from delayed trains (delay > 0) per hour.
+    - Each data point = ONE SPECIFIC HOUR on one specific day across the full year.
+    
+    Expected data points: 
+    - Weekdays: ~260 days × 24 hours = ~6,240 points (minus hours with no delays)
+    - Weekends: ~104 days × 24 hours = ~2,496 points (minus hours with no delays)
+    
+    max_delay_percentile: Trim delays above this percentile to reduce outlier influence (default 98%).
+    
+    Parameters:
+    -----------
+    station_id : str
+        The station STANOX code
+    all_data : pd.DataFrame
+        The complete dataset containing all train records
+    time_window_minutes : int, optional
+        Time window in minutes (default: 60)
+    num_platforms : int, optional
+        Number of platforms (default: 12)
+    figsize : tuple, optional
+        Figure size (default: (14, 10))
+    max_delay_percentile : int, optional
+        Percentile to trim extreme delays (default: 98)
+    """
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import pandas as pd
+    import numpy as np
+
+    plt.style.use('default')
+    sns.set_palette("husl")
+
+    print(f"🚀 CREATING TEMPORAL FLOW ANALYSIS FOR STATION {station_id}")
+    print("=" * 70)
+
+    # Filter data for the specific station from provided all_data
+    data = all_data[all_data['STANOX'] == str(station_id)].copy()
+    if len(data) == 0:
+        print(f"No data found for station {station_id}")
+        return None
+    
+    print(f"Loaded {len(data)} total records for station {station_id}")
+
+    # Filter for ALL trains that arrived (exclude cancellations) - not just incident trains
+    all_arrived_data = data[data['EVENT_TYPE'] != 'C'].copy()
+    if len(all_arrived_data) == 0:
+        print("No arrived trains found.")
+        return None
+    
+    print(f"Using {len(all_arrived_data)} arrived trains (both incident and non-incident) for flow calculation")
+
+    # Calculate delays for all trains
+    all_arrived_data['delay_minutes'] = pd.to_numeric(all_arrived_data['PFPI_MINUTES'], errors='coerce').fillna(0)
+    
+    # Mark which trains have delays > 0 (for delay statistics)
+    all_arrived_data['has_delay'] = all_arrived_data['delay_minutes'] > 0
+
+    # Create proper datetime timestamps using EVENT_DATETIME column
+    print("Creating datetime timestamps from EVENT_DATETIME...")
+    
+    def parse_event_datetime(event_dt_str):
+        """Parse EVENT_DATETIME string to extract date"""
+        if pd.isna(event_dt_str):
+            return None
+        try:
+            # EVENT_DATETIME format: 'DD-MMM-YYYY HH:MM'
+            dt = pd.to_datetime(event_dt_str, format='%d-%b-%Y %H:%M', errors='coerce')
+            return dt.date() if pd.notna(dt) else None
+        except:
+            return None
+    
+    # Extract dates from EVENT_DATETIME for incident trains
+    all_arrived_data['event_date'] = all_arrived_data['EVENT_DATETIME'].apply(parse_event_datetime)
+    
+    # Get mapping of day code to dates from incident trains
+    day_to_weekday = {'MO': 0, 'TU': 1, 'WE': 2, 'TH': 3, 'FR': 4, 'SA': 5, 'SU': 6}
+    
+    # Build a mapping of DAY code to all observed dates
+    day_date_mapping = {}
+    for day_code in day_to_weekday.keys():
+        day_data = all_arrived_data[all_arrived_data['DAY'] == day_code]
+        observed_dates = day_data['event_date'].dropna().unique()
+        if len(observed_dates) > 0:
+            day_date_mapping[day_code] = sorted(observed_dates)
+    
+    print(f"Found date mappings for {len(day_date_mapping)} day codes")
+    for day_code, dates in day_date_mapping.items():
+        if len(dates) > 0:
+            print(f"  {day_code}: {len(dates)} unique dates from {dates[0]} to {dates[-1]}")
+    
+    # Create row index for better distribution
+    all_arrived_data['row_idx'] = range(len(all_arrived_data))
+    
+    def create_datetime_with_event_dates(row):
+        """Create datetime using EVENT_DATETIME dates or inferred dates"""
+        try:
+            day_code = row['DAY']
+            time_val = row['ACTUAL_CALLS'] if pd.notna(row['ACTUAL_CALLS']) else row['PLANNED_CALLS']
+            
+            if pd.isna(time_val) or day_code not in day_to_weekday:
+                return None
+            
+            # Parse time
+            time_str = str(int(time_val)).zfill(4)
+            hour = int(time_str[:2])
+            minute = int(time_str[2:])
+            
+            # Get date - prioritize EVENT_DATETIME if available
+            if pd.notna(row['event_date']):
+                date_obj = row['event_date']
+            else:
+                # For non-incident trains, distribute across ALL observed dates for this day
+                # Use row index combined with train ID for better distribution
+                if day_code in day_date_mapping and len(day_date_mapping[day_code]) > 0:
+                    # Use row index to get different dates for same train on different occurrences
+                    date_idx = (hash(str(row['TRAIN_SERVICE_CODE'])) + row['row_idx']) % len(day_date_mapping[day_code])
+                    date_obj = day_date_mapping[day_code][date_idx]
+                else:
+                    return None
+            
+            # Create datetime with time
+            dt = pd.Timestamp(year=date_obj.year, month=date_obj.month, 
+                            day=date_obj.day, hour=hour, minute=minute)
+            return dt
+        except:
+            return None
+    
+    all_arrived_data['datetime'] = all_arrived_data.apply(create_datetime_with_event_dates, axis=1)
+    
+    # Drop rows with invalid datetimes
+    valid_data = all_arrived_data.dropna(subset=['datetime']).copy()
+    
+    if len(valid_data) == 0:
+        print("No valid datetime data.")
+        return None
+    
+    print(f"Created {len(valid_data)} valid timestamps")
+    
+    # Set datetime as index for time-series operations
+    valid_data = valid_data.set_index('datetime').sort_index()
+    
+    # Add day type
+    valid_data['day_type'] = valid_data.index.dayofweek.map(
+        lambda x: 'weekday' if x < 5 else 'weekend'
+    )
+    valid_data['hour_of_day'] = valid_data.index.hour
+    valid_data['weekday_name'] = valid_data.index.day_name()
+
+    # Process separately for weekdays and weekends
+    def process_day_type(data_subset, day_type_name):
+        """Process data for either weekdays or weekends - one data point per hour"""
+        if len(data_subset) == 0:
+            return pd.DataFrame(), pd.DataFrame()
+        
+        # Count UNIQUE trains per hour using TRAIN_SERVICE_CODE (ALL trains for flow)
+        hourly_flow = data_subset.groupby(pd.Grouper(freq='h'))['TRAIN_SERVICE_CODE'].nunique()
+        
+        # Filter only delayed trains (delay > 0) for delay statistics
+        delayed_trains = data_subset[data_subset['has_delay']].copy()
+        
+        # Calculate mean delay per hour ONLY from trains with delays > 0
+        if len(delayed_trains) > 0:
+            hourly_mean_delay = delayed_trains.groupby(pd.Grouper(freq='h'))['delay_minutes'].mean()
+        else:
+            # No delayed trains - create empty series
+            hourly_mean_delay = pd.Series(dtype=float)
+        
+        # Combine flow and delay - one row per hour
+        hourly_stats = pd.DataFrame({
+            'flow': hourly_flow,
+            'mean_delay': hourly_mean_delay
+        })
+        
+        # Keep all hours with flow (trains operated)
+        # For hours with no delays, mean_delay will be NaN - fill with 0 for visualization
+        hourly_stats = hourly_stats[hourly_stats['flow'].notna()].copy()
+        hourly_stats['mean_delay'] = hourly_stats['mean_delay'].fillna(0)
+        
+        if len(hourly_stats) == 0:
+            return pd.DataFrame(), pd.DataFrame()
+        
+        # Add hour of day for statistics
+        hourly_stats['hour_of_day'] = hourly_stats.index.hour
+        hourly_stats['day_type'] = day_type_name
+        hourly_stats['datetime'] = hourly_stats.index
+        
+        # Trim outliers using mean delay
+        if max_delay_percentile < 100 and len(hourly_stats) > 0:
+            delay_threshold = hourly_stats['mean_delay'].quantile(max_delay_percentile / 100)
+            hourly_stats = hourly_stats[hourly_stats['mean_delay'] <= delay_threshold]
+        
+        # Calculate summary statistics by hour of day for the table
+        hour_summary = hourly_stats.groupby('hour_of_day').agg({
+            'flow': ['mean', 'std', 'median', 'min', 'max'],
+            'mean_delay': ['mean', 'max', 'std']
+        }).round(2)
+        
+        # Flatten column names
+        hour_summary.columns = ['flow_mean', 'flow_std', 'flow_median', 'flow_min', 'flow_max',
+                                'delay_mean', 'delay_max', 'delay_std']
+        
+        return hourly_stats, hour_summary
+
+    # Process weekdays
+    weekday_data = valid_data[valid_data['day_type'] == 'weekday']
+    weekday_stats, weekday_hour_stats = process_day_type(weekday_data, 'weekday')
+    
+    # Process weekends
+    weekend_data = valid_data[valid_data['day_type'] == 'weekend']
+    weekend_stats, weekend_hour_stats = process_day_type(weekend_data, 'weekend')
+
+    if len(weekday_stats) == 0 and len(weekend_stats) == 0:
+        print("No statistics to plot after processing.")
+        return None
+
+    # Create figure with plots only (no tables)
+    fig, axes = plt.subplots(2, 1, figsize=figsize)
+    
+    # Process each day type
+    for idx, (stats_df, hour_stats, day_type_name) in enumerate([
+        (weekday_stats, weekday_hour_stats, 'WEEKDAYS'), 
+        (weekend_stats, weekend_hour_stats, 'WEEKENDS')
+    ]):
+        ax_plot = axes[idx]
+        
+        if len(stats_df) == 0:
+            ax_plot.text(0.5, 0.5, f'No {day_type_name.lower()} data', 
+                        ha='center', va='center', fontsize=14)
+            ax_plot.set_xticks([])
+            ax_plot.set_yticks([])
+            continue
+        
+        # Calculate correlation
+        r_flow_delay = stats_df[['flow', 'mean_delay']].corr().iloc[0, 1]
+        
+        # Plot: One point per hour
+        ax_plot.scatter(stats_df['mean_delay'], stats_df['flow'], 
+                       alpha=0.3, color='lightblue', s=30, 
+                       edgecolors='blue', linewidth=0.3,
+                       label=f'Hourly data (n={len(stats_df)})')
+        
+        # Add binned statistics with asymmetric error bars
+        from scipy import stats as scipy_stats
+        from scipy.interpolate import make_interp_spline
+        
+        if len(stats_df) > 1:
+            # LOESS-like smoothing using binned averages with asymmetric confidence intervals
+            # Create bins based on EQUAL DELAY INTERVALS (not equal row counts)
+            n_bins = 20  # Number of bins across delay range
+            min_observations_per_bin = 5  # Minimum hours needed for a bin to be plotted
+            
+            if len(stats_df) >= min_observations_per_bin:
+                delay_min = stats_df['mean_delay'].min()
+                delay_max = stats_df['mean_delay'].max()
+                
+                # Create equal-width delay bins
+                bin_edges = np.linspace(delay_min, delay_max, n_bins + 1)
+                stats_df['delay_bin'] = pd.cut(stats_df['mean_delay'], bins=bin_edges, 
+                                               include_lowest=True, labels=False)
+                
+                bin_delays = []
+                bin_flows = []
+                bin_flows_q25 = []
+                bin_flows_q75 = []
+                bin_counts = []
+                
+                for bin_idx in range(n_bins):
+                    bin_data = stats_df[stats_df['delay_bin'] == bin_idx]
+                    
+                    # Only include bins with enough observations
+                    if len(bin_data) >= min_observations_per_bin:
+                        bin_delays.append(bin_data['mean_delay'].mean())
+                        bin_flows.append(bin_data['flow'].mean())
+                        bin_flows_q25.append(bin_data['flow'].quantile(0.25))
+                        bin_flows_q75.append(bin_data['flow'].quantile(0.75))
+                        bin_counts.append(len(bin_data))
+                
+                if len(bin_delays) > 0:
+                    bin_delays = np.array(bin_delays)
+                    bin_flows = np.array(bin_flows)
+                    bin_flows_q25 = np.array(bin_flows_q25)
+                    bin_flows_q75 = np.array(bin_flows_q75)
+                    bin_counts = np.array(bin_counts)
+                    
+                    # Calculate asymmetric error bars (distance from mean to Q25 and Q75)
+                    # Ensure non-negative values
+                    yerr_lower = np.maximum(0, bin_flows - bin_flows_q25)
+                    yerr_upper = np.maximum(0, bin_flows_q75 - bin_flows)
+                    
+                    # Plot binned averages with asymmetric confidence intervals
+                    ax_plot.errorbar(bin_delays, bin_flows, 
+                                   yerr=[yerr_lower, yerr_upper],
+                                   fmt='o', color='darkgreen', markersize=8, 
+                                   linewidth=2, capsize=5, capthick=2,
+                                   label=f'Binned averages (n={len(bin_delays)} bins) Q25-Q75', zorder=5)
+                    
+                    # Optional: Add text labels showing observation count for bins with few observations
+                    for i, (delay, flow, count) in enumerate(zip(bin_delays, bin_flows, bin_counts)):
+                        if count < 50:  # Only label bins with < 50 observations
+                            ax_plot.annotate(f'n={count}', (delay, flow), 
+                                          textcoords="offset points", xytext=(0,10), 
+                                          ha='center', fontsize=8, color='darkgreen', alpha=0.7)
+                    
+                    # Smooth curve through binned data
+                    if len(bin_delays) >= 4:
+                        try:
+                            # Sort for spline
+                            sort_idx = np.argsort(bin_delays)
+                            x_sorted = bin_delays[sort_idx]
+                            y_sorted = bin_flows[sort_idx]
+                            
+                            # Use cubic spline for smoothing
+                            spline = make_interp_spline(x_sorted, y_sorted, k=min(3, len(x_sorted)-1))
+                            x_smooth = np.linspace(x_sorted.min(), x_sorted.max(), 200)
+                            y_smooth = spline(x_smooth)
+                            ax_plot.plot(x_smooth, y_smooth, 'g-', linewidth=3, 
+                                       label='Smooth trend (spline)', zorder=10)
+                        except Exception as e:
+                            pass  # Skip if spline fails
+        
+        ax_plot.set_xlabel('Mean Delay (minutes)', fontsize=12)
+        ax_plot.set_ylabel('Flow (trains/hour)', fontsize=12)
+        ax_plot.set_title(f'{day_type_name}: Flow vs Mean Delay\n(One Point Per Hour - Full Year)', fontsize=14, fontweight='bold')
+        ax_plot.set_xlim(0, 25)  # Fix x-axis range: 0-25 minutes
+        ax_plot.set_ylim(0, 25)  # Fix y-axis range: 0-25 trains/hour
+        ax_plot.grid(True, alpha=0.3)
+        ax_plot.legend()
+
+        # Print statistics for this day type
+        print(f"\n{'='*80}")
+        print(f"📊 STATION {station_id} - {day_type_name} HOURLY ANALYSIS")
+        print(f"{'='*80}")
+        
+        # Additional diagnostics
+        hours_with_delays = len(stats_df[stats_df['mean_delay'] > 0])
+        hours_no_delays = len(stats_df[stats_df['mean_delay'] == 0])
+        unique_hours_of_day = stats_df['hour_of_day'].nunique()
+        
+        print(f"\n📅 DATA COVERAGE:")
+        print(f"  - Hours with train operations: {len(stats_df)} hours")
+        print(f"  - Hours with delays (>0 min): {hours_with_delays} hours ({100*hours_with_delays/len(stats_df):.1f}%)")
+        print(f"  - Hours with no delays (0 min): {hours_no_delays} hours ({100*hours_no_delays/len(stats_df):.1f}%)")
+        print(f"  - Unique hours of day covered: {unique_hours_of_day} out of 24 hours")
+        print(f"  - Date range: {stats_df.index.min()} to {stats_df.index.max()}")
+
+    plt.suptitle(f'Hourly Analysis - Weekdays vs Weekends\nStation {station_id} - One Point Per Hour (Full Year Data)', 
+                 fontsize=16, fontweight='bold')
+    plt.tight_layout()
+    plt.show()
+
+    # Create SWAPPED AXES plots (X: flow, Y: delay) - Alternative perspective
+    fig_swapped, axes_swapped = plt.subplots(2, 1, figsize=figsize)
+    
+    for idx, (stats_df, hour_stats, day_type_name) in enumerate([
+        (weekday_stats, weekday_hour_stats, 'WEEKDAYS'), 
+        (weekend_stats, weekend_hour_stats, 'WEEKENDS')
+    ]):
+        ax_plot = axes_swapped[idx]
+        
+        if len(stats_df) == 0:
+            ax_plot.text(0.5, 0.5, f'No {day_type_name.lower()} data', 
+                        ha='center', va='center', fontsize=14)
+            ax_plot.set_xticks([])
+            ax_plot.set_yticks([])
+            continue
+        
+        # Calculate correlation (same as before)
+        r_flow_delay = stats_df[['flow', 'mean_delay']].corr().iloc[0, 1]
+        
+        # Plot: One point per hour (SWAPPED: X=flow, Y=delay)
+        ax_plot.scatter(stats_df['flow'], stats_df['mean_delay'], 
+                       alpha=0.3, color='lightblue', s=30, 
+                       edgecolors='blue', linewidth=0.3,
+                       label=f'Hourly data (n={len(stats_df)})')
+        
+        # Add binned statistics with asymmetric error bars
+        from scipy import stats as scipy_stats
+        from scipy.interpolate import make_interp_spline
+        
+        if len(stats_df) > 1:
+            # Binned averages (SWAPPED: bin by flow, show mean delay)
+            n_bins = 20
+            min_observations_per_bin = 5
+            
+            if len(stats_df) >= min_observations_per_bin:
+                flow_min = stats_df['flow'].min()
+                flow_max = stats_df['flow'].max()
+                
+                # Create equal-width flow bins
+                bin_edges_flow = np.linspace(flow_min, flow_max, n_bins + 1)
+                stats_df['flow_bin'] = pd.cut(stats_df['flow'], bins=bin_edges_flow, 
+                                              include_lowest=True, labels=False)
+                
+                bin_flows_swap = []
+                bin_delays_swap = []
+                bin_delays_q25 = []
+                bin_delays_q75 = []
+                bin_counts_swap = []
+                
+                for bin_idx in range(n_bins):
+                    bin_data = stats_df[stats_df['flow_bin'] == bin_idx]
+                    
+                    if len(bin_data) >= min_observations_per_bin:
+                        bin_flows_swap.append(bin_data['flow'].mean())
+                        bin_delays_swap.append(bin_data['mean_delay'].mean())
+                        bin_delays_q25.append(bin_data['mean_delay'].quantile(0.25))
+                        bin_delays_q75.append(bin_data['mean_delay'].quantile(0.75))
+                        bin_counts_swap.append(len(bin_data))
+                
+                if len(bin_flows_swap) > 0:
+                    bin_flows_swap = np.array(bin_flows_swap)
+                    bin_delays_swap = np.array(bin_delays_swap)
+                    bin_delays_q25 = np.array(bin_delays_q25)
+                    bin_delays_q75 = np.array(bin_delays_q75)
+                    bin_counts_swap = np.array(bin_counts_swap)
+                    
+                    # Calculate asymmetric error bars (distance from mean to Q25 and Q75)
+                    # Ensure non-negative values
+                    yerr_lower = np.maximum(0, bin_delays_swap - bin_delays_q25)
+                    yerr_upper = np.maximum(0, bin_delays_q75 - bin_delays_swap)
+                    
+                    # Plot binned averages with asymmetric error bars
+                    ax_plot.errorbar(bin_flows_swap, bin_delays_swap, 
+                                   yerr=[yerr_lower, yerr_upper],
+                                   fmt='o', color='darkgreen', markersize=8, 
+                                   linewidth=2, capsize=5, capthick=2,
+                                   label=f'Binned averages (n={len(bin_flows_swap)} bins) Q25-Q75', zorder=5)
+                    
+                    # Add text labels for sparse bins
+                    for i, (flow, delay, count) in enumerate(zip(bin_flows_swap, bin_delays_swap, bin_counts_swap)):
+                        if count < 50:
+                            ax_plot.annotate(f'n={count}', (flow, delay), 
+                                          textcoords="offset points", xytext=(0,10), 
+                                          ha='center', fontsize=8, color='darkgreen', alpha=0.7)
+                    
+                    # Smooth curve through binned data
+                    if len(bin_flows_swap) >= 4:
+                        try:
+                            sort_idx = np.argsort(bin_flows_swap)
+                            x_sorted = bin_flows_swap[sort_idx]
+                            y_sorted = bin_delays_swap[sort_idx]
+                            
+                            spline = make_interp_spline(x_sorted, y_sorted, k=min(3, len(x_sorted)-1))
+                            x_smooth = np.linspace(x_sorted.min(), x_sorted.max(), 200)
+                            y_smooth = spline(x_smooth)
+                            ax_plot.plot(x_smooth, y_smooth, 'g-', linewidth=3, 
+                                       label='Smooth trend (spline)', zorder=10)
+                        except Exception as e:
+                            pass
+        
+        ax_plot.set_xlabel('Flow (trains/hour)', fontsize=12)
+        ax_plot.set_ylabel('Mean Delay (minutes)', fontsize=12)
+        ax_plot.set_title(f'{day_type_name}: Mean Delay vs Flow\n(Alternative Perspective - Axes Swapped)', fontsize=14, fontweight='bold')
+        ax_plot.set_xlim(0, 25)  # Fix x-axis range: 0-25 trains/hour
+        ax_plot.set_ylim(0, 25)  # Fix y-axis range: 0-25 minutes
+        ax_plot.grid(True, alpha=0.3)
+        ax_plot.legend()
+
+    plt.suptitle(f'Alternative View: Delay vs Flow - Weekdays vs Weekends\nStation {station_id} - One Point Per Hour (Full Year Data)', 
+                 fontsize=16, fontweight='bold')
+    plt.tight_layout()
+    plt.show()
+
+    # Return both dataframes and hourly statistics
+    return {
+        'weekday': weekday_stats,
+        'weekend': weekend_stats,
+        'weekday_hour_stats': weekday_hour_stats,
+        'weekend_hour_stats': weekend_hour_stats
+    }
+print("plot_variable_relationships function ready!")
