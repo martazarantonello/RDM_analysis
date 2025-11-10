@@ -8,16 +8,16 @@ To use this tool, you need to download the NWR Historic Delay Attribution data f
 
 1. Create a `data/` folder in the project root if it doesn't exist.
 2. Download the following files and save them in `data/`. Please do not create separate folders within the data folder.
-   For delays:
+> For delays:
    - `Transparency_23-24_P12.csv`
    - `Transparency_23-24_P13.csv`
    - `Transparency_24-25_P01.csv`
    - ...
-   For SWR passenger loadings:
+> For SWR passenger loadings:
    - `SWR Passenger Loadings - RY25 P10.xlsx`
    - `SWR Passenger Loadings - RY25 P11.xlsx`
    - ...
-   For full schedules:
+> For full schedules:
    - `CIF_ALL_FULL_DAILY_toc-full.json.gz`
 3. The tool will automatically detect and load these files from the `data/` folder.
 4. Please refer to the `reference/` and `track lines/` folders for the only directly provided files.
