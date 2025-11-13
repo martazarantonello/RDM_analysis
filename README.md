@@ -28,7 +28,7 @@ To use this tool, you need to download the NWR Historic Delay Attribution data f
 
 ## Data Pre-Processing
 
-After you have downloaded this data and saved it to the `data/` folder, you need to perform some pre-processing. This is a crucial step in this analysis as you want to match the scheduled trains with delays and passenger loadings. The script rocesses schedule data, applies delays, and saves the results as pandas DataFrames organized by day of the week for each station. To pre-process the data, you need to run:
+After you have downloaded this data and saved it to the `data/` folder, you need to perform some pre-processing. This is a crucial step in this analysis as you want to match the scheduled trains with delays and passenger loadings. The script rocesses schedule data, applies delays, and saves the results as pandas DataFrames organized by day of the week for each station. Please note, that as of 11th November 2025, this script takes 1 full day to pre-process all the stations. To pre-process the data, you need to run:
 
 > python -m preprocessor.main
 
