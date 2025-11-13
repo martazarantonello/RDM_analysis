@@ -60,3 +60,32 @@ In the `demos/` folder, you can find all 5 demos defined by this analysis. These
 5. Station View
 
 Each demo is concerned with a different aspect of network analysis and granularity of inspection.
+
+## Testing
+
+This project includes a comprehensive test suite to ensure code quality and reliability.
+
+**82 tests** covering the preprocessor module functions (79% coverage).
+
+### Run Tests
+```bash
+# Run all tests
+pytest
+
+# Run with details
+pytest -v
+
+# Run specific test file
+pytest tests/test_preprocessor_utils.py
+```
+
+**All tests are passing ✅**
+
+For detailed testing documentation, see [tests/README.md](tests/README.md).
+
+### VS Code Integration
+- Click the **Testing** icon (beaker) in the sidebar
+- If tests don't appear: Reload window (`Ctrl+Shift+P` → "Reload Window")
+- Click refresh button in Testing panel
+
+**Tip:** If VS Code Test Explorer has issues, use the terminal - it always works!
