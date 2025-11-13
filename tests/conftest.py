@@ -1,6 +1,7 @@
 """
 Pytest configuration file with fixtures and shared test setup.
 This file is automatically loaded by pytest and provides fixtures available to all tests.
+These are data used for my testing (expected outcomes).
 """
 
 import pytest
@@ -20,26 +21,62 @@ def sample_schedule_entry():
         'JsonScheduleV1': {
             'schedule_days_runs': '1111100',  # Monday-Friday
             'schedule_segment': {
+                'signalling_id': '1T95',
+                'CIF_train_category': 'XX',
+                'CIF_headcode': 'TEST',
+                'CIF_course_indicator': '1',
                 'CIF_train_service_code': 'TEST123',
+                'CIF_business_sector': 'XX',
+                'CIF_power_type': 'EMU',
+                'CIF_timing_load': '377',
+                'CIF_speed': '100',
+                'CIF_operating_characteristics': None,
+                'CIF_train_class': 'B',
+                'CIF_sleepers': 'N',
+                'CIF_reservations': 'N',
+                'CIF_connection_indicator': None,
+                'CIF_catering_code': None,
+                'CIF_service_branding': None,
                 'schedule_location': [
                     {
-                        'tiploc_code': 'ORIGIN',
                         'location_type': 'LO',
+                        'record_identity': 'LO',
+                        'tiploc_code': 'ORIGIN',
+                        'tiploc_instance': None,
                         'departure': '0800',
-                        'platform': '1'
+                        'public_departure': '0800',
+                        'platform': '1',
+                        'line': '1',
+                        'engineering_allowance': None,
+                        'pathing_allowance': None,
+                        'performance_allowance': None
                     },
                     {
-                        'tiploc_code': 'MIDDLE',
                         'location_type': 'LI',
+                        'record_identity': 'LI',
+                        'tiploc_code': 'MIDDLE',
+                        'tiploc_instance': None,
                         'departure': '0830',
+                        'public_departure': '0830',
+                        'platform': '2',
+                        'line': '2',
+                        'engineering_allowance': None,
+                        'pathing_allowance': None,
+                        'performance_allowance': None,
                         'arrival': '0828',
-                        'platform': '2'
+                        'public_arrival': '0828',
+                        'pass': None,
+                        'path': None
                     },
                     {
-                        'tiploc_code': 'DEST',
                         'location_type': 'LT',
+                        'record_identity': 'LT',
+                        'tiploc_code': 'DEST',
+                        'tiploc_instance': None,
+                        'platform': '3',
                         'arrival': '0900',
-                        'platform': '3'
+                        'public_arrival': '0900',
+                        'path': None
                     }
                 ]
             }
