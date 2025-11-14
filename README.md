@@ -43,6 +43,15 @@ This can be run with different specifications for the user's needs. Below are de
 
 This script saves processed schedule and delay data to parquet files for railway stations by DFT category in a `processed_data/` folder.
 
+## Requirements
+
+To run the repository, you need the following Python packages:
+
+- `pandas`
+- `numpy`
+- `matplotlib`
+- `seaborn`
+
 ## Tool Demos and Outputs
 
 After you have downloaded and saved the raw data, and pre-processed it using the preprocessor tool, you can make use of the demos for the actual network analysis. To do so, you need to load the data you have just pre-processed. In the `outputs/` folder you can find two files:
