@@ -8,20 +8,28 @@ To use this tool, you need to download the NWR Historic Delay Attribution data f
 
 1. Create a `data/` folder in the project root if it doesn't exist.
 2. Download the following files and save them in `data/`. Please do not create separate folders within the data folder.
-> For delays:
+> For delays, please look up "NWR Historic Delay Attribution". Under "data files", you will find .zip files named, for example "202324.zip" for a complete set of one year data. Once you extract all, you will find data files named as :
    - `Transparency_23-24_P12.csv`
    - `Transparency_23-24_P13.csv`
    - `Transparency_24-25_P01.csv`
    - ...
-> For SWR passenger loadings:
+"Transparency" refers to the initiative by the Rail Delivery Group (RDG) and train operators in Great Britain to publish Key Transparency Indicators (KTIs), that is, publicly available operational and performance data.
+"23-24" stands for the year and "P01" is the month in which the data is located. These align with financial years, and therefore begin in the month of April. You could also find .zip files named "202425 data files 20250213.zip" or "Transparency 25-26 P01 20250516.zip", here, the date at the end of the name indicates the last entry in the data itself. 
+
+> For SWR passenger loadings, please look up "SWR Passenger Loadings". Under "data files", you will find .xlsx files named:
    - `SWR Passenger Loadings - RY25 P10.xlsx`
    - `SWR Passenger Loadings - RY25 P11.xlsx`
    - ...
-> For full schedules:
+Here, "RY25" stands for the rail year that the data covers, with "P10" being the month within that year.
+
+> For full schedules, please look up "NWR Schedule". Under "data files" you will find:
    - `CIF_ALL_FULL_DAILY_toc-full.json.gz`
-3. The tool will automatically detect and load these files from the `data/` folder.
-4. Please refer to the `reference/` folder for the only directly provided files, these include station reference files with latitude and longitude and description-related information.
-5. **IMPORTANT** Here, the schedule file needs to be cleaned before it is pre-processed. To do so, please:
+This file contains "toc-full" which stands for Train Operating Companies (TOC) as a Full Extract in daily formats. The full extend of the data is weekly, meaning it contains all daily scheduled trains for a standard week in the year.
+
+3. Inside the incidents.py, passenger_loadings.py and schedule.py you will find specifications for each file and how to modify their entries depending on the rail month or year.
+4. The tool will automatically detect and load these files from the `data/` folder.
+5. Please refer to the `reference/` folder for the only directly provided files, these include station reference files with latitude and longitude and description-related information.
+6. **IMPORTANT** Here, the schedule file needs to be cleaned before it is pre-processed. To do so, please:
  - Run the `data/schedule_cleaning.py` file, where the function clean_schedule is present.
  - This will create the CIF_ALL_FULL_DAILY_toc-full_p4.pkl file
  - This is the cleaned version of the downloaded schedule file in .json.gz format. The schedule.py file already contains the correct code for this cleaned file to be called properly in the following sections.
