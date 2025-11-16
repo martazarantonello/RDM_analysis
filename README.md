@@ -1,5 +1,19 @@
-This repository stores projects related to the MSci in Research program within the Infrastructure & Environment division at the University of Glasgow. It will contain shared files with the professor supervising my project, Dr. Ji-Eun Byun, to promote collaboration between our ends and combine our efforts.
-All files are considered as input in their form of download. The sources of these downloads are listed below.
+# Reconstruction of Rail Incidents & Delay Propagation in UK
+
+This toolkit integrates train schedules, incident and delay records, and passenger loading data from the UK’s [Rail Data Marketplace](https://raildata.org.uk/) to link together key variables of day-to-day rail operations. Our goal is to build a unified dataset that connects **system-level performance** (network-wide delays and cancellations) with **component-level events** (locations and durations of initial incidents, train movements, delay occurrences at stations, and passenger crowding).
+
+This is one of the first efforts to generate a comprehensive dataset suitable for **validation of system-level rail models**, addressing a long-standing gap in **data availability for systems engineering**.
+
+## What this toolkit invites innovation in
+
+1. **Forecasting delay propagation** using AI and systems engineering to understand how local incidents ripple across the network.  
+2. **Assessing and comparing station performance** under different demand levels and operational scenarios.  
+3. **Exploring cause-and-effect relationships** between operational factors and delay severity.  
+4. **Beyond** — we warmly welcome new ideas for new use cases and extensions.
+
+## Research Project and contact
+This repository is a result of the MSc research project by Marta Zarantonello, supervised by Dr Ji-Eun Byun, at the Research Division of Infrastructure & Environment, University of Glasgow. 
+If you have any enquires, please contact [ji-eun.byun@glasgow.ac.uk](mailto:ji-eun.byun@glasgow.ac.uk).
 
 ## Data Setup
 
@@ -8,7 +22,7 @@ To use this tool, you need to download the NWR Historic Delay Attribution data f
 
 1. Create a `data/` folder in the project root if it doesn't exist.
 2. Download the following files and save them in `data/`. Please do not create separate folders within the data folder.
-> For delays, please look up "NWR Historic Delay Attribution". Under "data files", you will find .zip files named, for example "202324.zip" for a complete set of one year data. Once you extract all, you will find data files named as :
+> For delays, please search "NWR Historic Delay Attribution". Under "data files", you will find .zip files named, for example "202324.zip" for a complete set of one year data. Once you extract all, you will find data files named as :
    - `Transparency_23-24_P12.csv`
    - `Transparency_23-24_P13.csv`
    - `Transparency_24-25_P01.csv`
@@ -38,7 +52,7 @@ This file contains "toc-full" which stands for Train Operating Companies (TOC) a
 
 After you have downloaded this data and saved it to the `data/` folder, you need to perform some pre-processing. This is a crucial step in this analysis as you want to match the scheduled trains with delays and passenger loadings. The script processes schedule data, applies delays, and saves the results as pandas DataFrames organized by day of the week for each station. Please note, that as of 11th November 2025, this script takes 1 full day to pre-process all the stations. To pre-process the data, you need to run:
 
-> python -m preprocessor.preprocessor
+> python -m preprocess.preprocessor
 
 This can be run with different specifications for the user's needs. Below are defined all its possible usages:
 
@@ -106,3 +120,5 @@ For detailed testing documentation, see [tests/README.md](tests/README.md).
 - Click refresh button in Testing panel
 
 **Tip:** If VS Code Test Explorer has issues, use the terminal - it always works!
+
+
