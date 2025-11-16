@@ -66,6 +66,9 @@ def clean_schedule():
     # Convert to DataFrame
     print("Converting to DataFrame...")
     df_schedule = pd.DataFrame(schedules)
+
+    print("First few rows of the schedule DataFrame:")
+    print(df_schedule.head())
     
     print(f"DataFrame shape: {df_schedule.shape}")
     print(f"Columns: {list(df_schedule.columns)}")
