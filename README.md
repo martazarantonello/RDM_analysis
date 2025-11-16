@@ -46,7 +46,14 @@ This file contains "toc-full" which stands for Train Operating Companies (TOC) a
 6. **IMPORTANT** Here, the schedule file needs to be cleaned before it is pre-processed. To do so, please:
  - Run the `data/schedule_cleaning.py` file, where the function clean_schedule is present.
  - This will create the CIF_ALL_FULL_DAILY_toc-full_p4.pkl file
- - This is the cleaned version of the downloaded schedule file in .json.gz format. The schedule.py file already contains the correct code for this cleaned file to be called properly in the following sections.
+ - This is the cleaned version of the downloaded schedule file in .json.gz format. This data file has the suffix "p4" from it being the 4th section in the original schedule file.   
+    The file is a newline-delimited JSON (NDJSON) file containing 5 types:
+    1. JsonTimetableV1 - Header/metadata
+    2. TiplocV1 - Location codes
+    3. JsonAssociationV1 - Train associations
+    4. JsonScheduleV1 - Schedule data (THIS IS WHAT WE EXTRACT)
+    5. EOF - End of file marker
+ The schedule.py file already contains the correct code for this cleaned file to be called properly in the following sections.
 
 ## Data Pre-Processing
 

@@ -1,4 +1,7 @@
+
 # SCHEDULE CLEANING ONLY - CODE TO CLEAN THE OVERALL TOC FULL FILE TO EXTRACT ONLY THE SCHEDULE PART AND SAVE IT AS A PICKLE FILE
+## Please refer to README.md for more details.  
+
 
 from pathlib import Path
 import pandas as pd
