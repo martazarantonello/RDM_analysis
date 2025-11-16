@@ -194,7 +194,7 @@ def process_schedule(st_code, schedule_data=None, reference_files=None,
             
             if tiploc:
                 # Count matching trains in pre-loaded schedule data
-                for s in schedule_data_loaded:
+                for idx, s in schedule_data_loaded.iterrows():
                     # Navigate to the correct data path: JsonScheduleV1 > schedule_segment > schedule_location
                     json_schedule = s.get("JsonScheduleV1", {})
                     schedule_segment = json_schedule.get("schedule_segment", {})

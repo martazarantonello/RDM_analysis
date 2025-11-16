@@ -299,7 +299,7 @@ def save_stations_by_category(category=None, output_dir="processed_data"):
     
     print("Step 1: Loading schedule data...")
     schedule_data_loaded, stanox_ref, tiploc_to_stanox = load_schedule_data_once(schedule_data, reference_files)
-    print(f"Loaded schedule data with {len(schedule_data_loaded) if schedule_data_loaded else 0} entries")
+    print(f"Loaded schedule data with {len(schedule_data_loaded) if len(schedule_data_loaded) else 0} entries")
     
     print("Step 2: Pre-loading incident data...")
     incident_data_loaded = load_incident_data_once(incident_files)
