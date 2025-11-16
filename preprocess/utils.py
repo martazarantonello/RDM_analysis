@@ -61,7 +61,7 @@ def load_schedule_data(st_code, schedule_data, reference_files):
         return 0, None, None, stanox_ref, {}
 
     # Load the schedule file (Pickle format)
-    with open(schedule_data["toc full"], "rb") as f:
+    with open(schedule_data["schedule"], "rb") as f:
         schedule_data_loaded = pickle.load(f)
 
     # Count trains for this TIPLOC
@@ -685,7 +685,7 @@ def load_schedule_data_once(schedule_data, reference_files):
     try:
         # Load schedule data
         print("  Loading schedule pickle file...")
-        schedule_data_loaded = pd.read_pickle(schedule_data["toc full"])
+        schedule_data_loaded = pd.read_pickle(schedule_data["schedule"])
         
         # Load reference data
         print("  Loading reference data...")
