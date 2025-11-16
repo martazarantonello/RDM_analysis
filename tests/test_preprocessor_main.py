@@ -11,7 +11,7 @@ import pytest
 import pandas as pd
 import os
 from unittest.mock import Mock, patch, MagicMock
-from preprocessor.preprocessor import (
+from preprocess.preprocessor import (
     get_weekday_from_schedule_entry,
     load_stations,
     save_processed_data_by_weekday_to_dataframe

@@ -105,10 +105,3 @@ pytest -v --tb=short
 - Python path settings
 
 ---
-
-## VS Code Integration
-
-1. Click **Testing** icon (beaker) in sidebar
-2. Tests should auto-discover
-3. **If discovery fails:** `Ctrl+Shift+P` → "Reload Window"
-4. **Alternative:** Always use terminal commands
