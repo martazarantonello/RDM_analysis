@@ -1,3 +1,8 @@
+
+# NB: these are files containing delay incident data, named according to the period selected for this initial analysis.
+#     Please rename the year or month as needed to reflect the data you are using.
+#     Please refer to README.md for more details on how to obtain these files.
+
 # period: one financial/rail year
 
 from pathlib import Path

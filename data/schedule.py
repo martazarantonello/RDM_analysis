@@ -1,4 +1,7 @@
-# IMPORTANT: please run schedule_cleaning.py first to generate the cleaned schedule pickle file.
+
+#  NB: these are files containing schedule data, including the cleaned schedule pickle file. If you want to use another schedule file, please change the file names accordingly, but do not change the "toc full" entry.
+#      Please run schedule_cleaning.py first to generate the cleaned schedule pickle file.
+#      Please refer to README.md for more details.
 
 # Base data directory (relative to repo root)
 from pathlib import Path

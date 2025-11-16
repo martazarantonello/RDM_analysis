@@ -1,3 +1,7 @@
+
+# NB: these are files containing reference data used in the analysis. These files ar provided in the 'reference provided' folder.
+#     Please refer to README.md for more details.
+
 from pathlib import Path
 
 # Base data directory (relative to repo root)
