@@ -27,6 +27,7 @@ To use this tool, you need to download the NWR Historic Delay Attribution data f
    - `Transparency_23-24_P13.csv`
    - `Transparency_24-25_P01.csv`
    - ...
+
 "Transparency" refers to the initiative by the Rail Delivery Group (RDG) and train operators in Great Britain to publish Key Transparency Indicators (KTIs), that is, publicly available operational and performance data.
 "23-24" stands for the year and "P01" is the month in which the data is located. These align with financial years, and therefore begin in the month of April. You could also find .zip files named "202425 data files 20250213.zip" or "Transparency 25-26 P01 20250516.zip", here, the date at the end of the name indicates the last entry in the data itself. 
 
@@ -34,10 +35,12 @@ To use this tool, you need to download the NWR Historic Delay Attribution data f
    - `SWR Passenger Loadings - RY25 P10.xlsx`
    - `SWR Passenger Loadings - RY25 P11.xlsx`
    - ...
+
 Here, "RY25" stands for the rail year that the data covers, with "P10" being the month within that year.
 
 > For full schedules, please look up "NWR Schedule". Under "data files" you will find:
    - `CIF_ALL_FULL_DAILY_toc-full.json.gz`
+   
 This file contains "toc-full" which stands for Train Operating Companies (TOC) as a Full Extract in daily formats. The full extend of the data is weekly, meaning it contains all daily scheduled trains for a standard week in the year.
 
 3. Inside the incidents.py, passenger_loadings.py and schedule.py you will find specifications for each file and how to modify their entries depending on the rail month or year.
