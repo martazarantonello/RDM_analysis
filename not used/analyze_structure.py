@@ -1,3 +1,21 @@
+# Analyze the structure of the .gz file containing newline-delimited JSON objects
+# Contains:
+# ============================================================
+# Total lines in file: 775,558
+
+#Object type breakdown:
+#============================================================
+#JsonScheduleV1                :    680,185 (87.70%)
+#JsonAssociationV1             :     83,369 (10.75%)
+#TiplocV1                      :     12,002 ( 1.55%)
+#JsonTimetableV1               :          1 ( 0.00%)
+#EOF                           :          1 ( 0.00%)
+
+#Total distinct object types: 5
+
+# NB: The TipòpcV1 file could not have been used as reference file as it does not include lat and long information.
+
+
 import gzip
 import json
 from collections import defaultdict
