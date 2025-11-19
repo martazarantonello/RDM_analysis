@@ -15,9 +15,7 @@ import numpy as np
 
 from data.schedule import schedule_data
 from data.reference import reference_files
-
 from data.incidents import incident_files
-from data.variables import benchmark_stanox
 
 # Add the parent directory to the Python path to access the input module
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -31,10 +29,13 @@ def load_schedule_data(st_code, schedule_data, reference_files):
     Load all necessary data for schedule processing.
     
     Returns:
-        tuple: (train_count, tiploc, schedule_data_loaded, stanox_ref, tiploc_to_stanox)
+        tuple: (train_count (deprecated, returns None), tiploc, schedule_data_loaded, stanox_ref, tiploc_to_stanox)
     """
-    # Load the category A stations reference file (pandas DataFrame)
-    stanox_ref_df = pd.read_pickle(reference_files["category A stations"])
+    # Load the all DFT categories stations reference file (JSON format)
+    with open(reference_files["all dft categories"], 'r') as f:
+        reference_data = json.load(f)
+    # Convert to DataFrame
+    stanox_ref_df = pd.DataFrame(reference_data)
     
     # Convert DataFrame to list of dictionaries for backward compatibility
     stanox_ref = stanox_ref_df.to_dict('records')
@@ -60,24 +61,18 @@ def load_schedule_data(st_code, schedule_data, reference_files):
         print(f"Warning: STANOX {st_code} not found in reference data")
         return 0, None, None, stanox_ref, {}
 
-    # Load the schedule file (Pickle format)
-    with open(schedule_data["schedule"], "rb") as f:
-        schedule_data_loaded = pickle.load(f)
-
-    # Count trains for this TIPLOC
-    train_count = 0
-    for entry in schedule_data_loaded:
-        json_sched = entry.get("JsonScheduleV1", {})
-        sched_segment = json_sched.get("schedule_segment", {})
-        sched_loc = sched_segment.get("schedule_location", [])
-        tiploc_codes = {loc.get("tiploc_code") for loc in sched_loc}
-        if tiploc in tiploc_codes:
-            train_count += 1
+    # Load the schedule file (Pickle format) - use pandas for consistency
+    schedule_data_loaded = pd.read_pickle(schedule_data["schedule"])
+    
+    # Convert to list of dicts if it's a DataFrame
+    if isinstance(schedule_data_loaded, pd.DataFrame):
+        schedule_data_loaded = schedule_data_loaded.to_dict('records')
 
     # Create tiploc_to_stanox mapping from DataFrame
     tiploc_to_stanox = dict(zip(stanox_ref_df['tiploc'], stanox_ref_df['stanox']))
 
-    return train_count, tiploc, schedule_data_loaded, stanox_ref, tiploc_to_stanox
+    # Return without train_count (deprecated parameter)
+    return None, tiploc, schedule_data_loaded, stanox_ref, tiploc_to_stanox
 
 
 # This code processes schedule files for one station code (st_code).
@@ -116,9 +111,9 @@ def extract_schedule_days_runs(schedule_entry):
         str: Binary string representing days the schedule runs, or None if not found
     """
     try:
-        # schedule_days_runs is at the JsonScheduleV1 level, not in schedule_segment
-        return schedule_entry['JsonScheduleV1'].get('schedule_days_runs')
-    except (KeyError, TypeError):
+        # schedule_days_runs is at the top level (flattened structure)
+        return schedule_entry.get('schedule_days_runs')
+    except (KeyError, TypeError, AttributeError):
         return None
 
 
@@ -194,14 +189,27 @@ def process_schedule(st_code, schedule_data=None, reference_files=None,
             
             if tiploc:
                 # Count matching trains in pre-loaded schedule data
-                for idx, s in schedule_data_loaded.iterrows():
-                    # Navigate to the correct data path: JsonScheduleV1 > schedule_segment > schedule_location
-                    json_schedule = s.get("JsonScheduleV1", {})
-                    schedule_segment = json_schedule.get("schedule_segment", {})
-                    sched_loc = schedule_segment.get("schedule_location", [])
-                    tiploc_codes = {loc.get("tiploc_code") for loc in sched_loc}
-                    if tiploc in tiploc_codes:
-                        train_count += 1
+                # Handle both DataFrame and list inputs
+                if hasattr(schedule_data_loaded, 'iterrows'):
+                    # DataFrame: iterrows returns (index, Series), convert Series to dict
+                    for idx, row in schedule_data_loaded.iterrows():
+                        s = row.to_dict() if hasattr(row, 'to_dict') else row
+                        # Navigate to the correct data path: JsonScheduleV1 > schedule_segment > schedule_location
+                        json_schedule = s.get("JsonScheduleV1", {})
+                        schedule_segment = json_schedule.get("schedule_segment", {})
+                        sched_loc = schedule_segment.get("schedule_location", [])
+                        tiploc_codes = {loc.get("tiploc_code") for loc in sched_loc}
+                        if tiploc in tiploc_codes:
+                            train_count += 1
+                else:
+                    # List: iterate directly
+                    for s in schedule_data_loaded:
+                        json_schedule = s.get("JsonScheduleV1", {})
+                        schedule_segment = json_schedule.get("schedule_segment", {})
+                        sched_loc = schedule_segment.get("schedule_location", [])
+                        tiploc_codes = {loc.get("tiploc_code") for loc in sched_loc}
+                        if tiploc in tiploc_codes:
+                            train_count += 1
     else:
         print("Loading data from files (this may take a while)...")
         train_count, tiploc, schedule_data_loaded, stanox_ref, tiploc_to_stanox = load_schedule_data(
@@ -219,21 +227,24 @@ def process_schedule(st_code, schedule_data=None, reference_files=None,
     trains_processed = 0
 
     print(f"Processing {len(schedule_data_loaded)} schedule entries for TIPLOC: {tiploc}")
-    print(f"Expected to find {train_count} matching trains")
 
-    # Process schedules to find matching trains (limit to train_count)
-    for idx, s in enumerate(schedule_data_loaded):
+    # Handle both DataFrame and list inputs
+    if hasattr(schedule_data_loaded, 'iterrows'):
+        # DataFrame: convert to list of dicts for uniform processing
+        schedule_data_list = schedule_data_loaded.to_dict('records')
+    else:
+        # Already a list
+        schedule_data_list = schedule_data_loaded
+
+    # Process schedules to find matching trains
+    for idx, s in enumerate(schedule_data_list):
         # Progress indicator for large datasets
         if idx % 10000 == 0:
-            print(f"Processed {idx}/{len(schedule_data_loaded)} entries, found {trains_processed} matching trains")
-        
-        # Early termination if we've found enough trains
-        if trains_processed >= train_count:
-            print(f"Reached target of {train_count} trains, stopping early at entry {idx}")
-            break
+            print(f"Processed {idx}/{len(schedule_data_list)} entries, found {trains_processed} matching trains")
             
         try:
-            schedule_locations = s['JsonScheduleV1']['schedule_segment']['schedule_location']
+            # Access schedule_segment directly (not nested under JsonScheduleV1)
+            schedule_locations = s['schedule_segment']['schedule_location']
         except (KeyError, TypeError):
             continue  # Skip malformed entries
         
@@ -280,7 +291,8 @@ def process_schedule(st_code, schedule_data=None, reference_files=None,
         
 
         try:
-            train_service_code = s["JsonScheduleV1"]["schedule_segment"]["CIF_train_service_code"]
+            # Access CIF_train_service_code directly from schedule_segment (not nested under JsonScheduleV1)
+            train_service_code = s["schedule_segment"]["CIF_train_service_code"]
         except (KeyError, TypeError):
             continue  # Skip entries without service code
 

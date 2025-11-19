@@ -10,13 +10,13 @@ Processes schedule data, applies delays, and saves the results as pandas DataFra
 organized by day of the week for each station.
 
 Usage:
-- Single station: python -m preprocessor.preprocessor <STANOX_CODE>
-- Category A: python -m preprocessor.preprocessor --category-A
-- Category B: python -m preprocessor.preprocessor --category-B
-- Category C1: python -m preprocessor.preprocessor --category-C1
-- Category C2: python -m preprocessor.preprocessor --category-C2
-- All categories: python -m preprocessor.preprocessor --all-categories
-- Interactive: python -m preprocessor.preprocessor
+- Single station: python -m preprocess.preprocessor <STANOX_CODE>
+- Category A: python -m preprocess.preprocessor --category-A
+- Category B: python -m preprocess.preprocessor --category-B
+- Category C1: python -m preprocess.preprocessor --category-C1
+- Category C2: python -m preprocess.preprocessor --category-C2
+- All categories: python -m preprocess.preprocessor --all-categories
+- Interactive: python -m preprocess.preprocessor
 """
 
 import json
