@@ -66,12 +66,12 @@ After you have downloaded this data and saved it to the `data/` folder, you need
 
 This can be run with different specifications for the user's needs. Below are defined all its possible usages:
 
-1. To process All categories: python -m preprocessor.main --all-categories
-2. To process a single station: python -m preprocessor.main <STANOX_CODE>
-3. To process Category A stations only : python -m preprocessor.main --category-A
-4. To process Category B stations only: python -m preprocessor.main --category-B
-5. To process Category C1 stations only: python -m preprocessor.main --category-C1
-6. To process Category C2 stations only: python -m preprocessor.main --category-C2
+1. To process All categories: python -m preprocess.preprocessor --all-categories
+2. To process a single station: python -m preprocess.preprocessor <STANOX_CODE>
+3. To process Category A stations only : python -m preprocess.preprocessor --category-A
+4. To process Category B stations only: python -m preprocess.preprocessor --category-B
+5. To process Category C1 stations only: python -m preprocess.preprocessor --category-C1
+6. To process Category C2 stations only: python -m preprocess.preprocessor --category-C2
 
 This script saves processed schedule and delay data to parquet files for railway stations by DFT category in a `processed_data/` folder.
 
