@@ -1,8 +1,8 @@
 # Reconstruction of Rail Incidents & Delay Propagation in UK
 
-This toolkit integrates train schedules, incident and delay records, and passenger loading data from the UK’s [Rail Data Marketplace](https://raildata.org.uk/) to link together key variables of day-to-day rail operations. Our goal is to build a unified dataset that connects **system-level performance** (network-wide delays and cancellations) with **component-level events** (locations and durations of initial incidents, train movements, delay occurrences at stations, and passenger crowding).
+This toolkit integrates train schedules, incident and delay records from the UK’s [Rail Data Marketplace](https://raildata.org.uk/) to link together key variables of day-to-day rail operations. Our goal is to build a unified dataset that connects **system-level performance** (network-wide delays and cancellations) with **component-level events** (locations and durations of initial incidents, train movements, delay occurrences at stations, and passenger crowding).
 
-This is one of the first efforts to generate a comprehensive dataset suitable for **validation of system-level rail models**, addressing a long-standing gap in **data availability for systems engineering**.
+This is one of the first efforts to generate a comprehensive dataset suitable for **validation of system-level rail models**, addressing a long-standing gap in **data availability for systems engineering**. Moving forward, expanding this work will require the integration of broader and more diverse data sources to capture the full complexity of rail-system behaviour. Future research should therefore focus on combining complementary datasets, improving data coverage and granularity, and exploring new forms of data that can enrich system-level understanding. Such efforts will help establish a more holistic and robust foundation for modelling, analysis, and decision-support across the rail domain.
 
 ## What this toolkit invites innovation in
 
@@ -17,7 +17,7 @@ If you have any enquires, please contact [ji-eun.byun@glasgow.ac.uk](mailto:ji-e
 
 ## Data Setup
 
-To use this tool, you need to download the NWR Historic Delay Attribution data from Network Rail, SWR Passenger Loadings and NWR Schedule data (or your organisation's portal). You can access these files from the Rail Data Marketplace (RDM) platform here: https://raildata.org.uk/. 
+To use this tool, you need to download the NWR Historic Delay Attribution data from Network Rail and NWR Schedule data (or your organisation's portal). You can access these files from the Rail Data Marketplace (RDM) platform here: https://raildata.org.uk/. 
 >  The data is not included in this repository due to licensing and size restrictions.
 
 1. Create a `data/` folder in the project root if it doesn't exist.
@@ -31,19 +31,12 @@ To use this tool, you need to download the NWR Historic Delay Attribution data f
 "Transparency" refers to the initiative by the Rail Delivery Group (RDG) and train operators in Great Britain to publish Key Transparency Indicators (KTIs), that is, publicly available operational and performance data.
 "23-24" stands for the year and "P01" is the month in which the data is located. These align with financial years, and therefore begin in the month of April. You could also find .zip files named "202425 data files 20250213.zip" or "Transparency 25-26 P01 20250516.zip", here, the date at the end of the name indicates the last entry in the data itself. 
 
-> For SWR passenger loadings, please look up "SWR Passenger Loadings". Under "data files", you will find .xlsx files named:
-   - `SWR Passenger Loadings - RY25 P10.xlsx`
-   - `SWR Passenger Loadings - RY25 P11.xlsx`
-   - ...
-
-Here, "RY25" stands for the rail year that the data covers, with "P10" being the month within that year.
-
 > For full schedules, please look up "NWR Schedule". Under "data files" you will find:
    - `CIF_ALL_FULL_DAILY_toc-full.json.gz`
    
 This file contains "toc-full" which stands for Train Operating Companies (TOC) as a Full Extract in daily formats. The full extend of the data is weekly, meaning it contains all daily scheduled trains for a standard week in the year.
 
-3. Inside the incidents.py, passenger_loadings.py and schedule.py you will find specifications for each file and how to modify their entries depending on the rail month or year.
+3. Inside the incidents.py and schedule.py you will find specifications for each file and how to modify their entries depending on the rail month or year.
 4. The tool will automatically detect and load these files from the `data/` folder.
 5. Please refer to the `reference/` folder for the only directly provided files, these include station reference files with latitude and longitude and description-related information.
 6. **IMPORTANT** Here, the schedule file needs to be cleaned before it is pre-processed. To do so, please:
@@ -60,7 +53,7 @@ This file contains "toc-full" which stands for Train Operating Companies (TOC) a
 
 ## Data Pre-Processing
 
-After you have downloaded this data and saved it to the `data/` folder, you need to perform some pre-processing. This is a crucial step in this analysis as you want to match the scheduled trains with delays and passenger loadings. The script processes schedule data, applies delays, and saves the results as pandas DataFrames organized by day of the week for each station. Please note, that as of 11th November 2025, this script takes 1 full day to pre-process all the stations. To pre-process the data, you need to run:
+After you have downloaded this data and saved it to the `data/` folder, you need to perform some pre-processing. This is a crucial step in this analysis as you want to match the scheduled trains with delays. The script processes schedule data, applies delays, and saves the results as pandas DataFrames organized by day of the week for each station. Please note, that as of 11th November 2025, this script takes 1 full day to pre-process all the stations. To pre-process the data, you need to run:
 
 > python -m preprocess.preprocessor
 
@@ -73,7 +66,8 @@ This can be run with different specifications for the user's needs. Below are de
 5. To process Category C1 stations only: python -m preprocess.preprocessor --category-C1
 6. To process Category C2 stations only: python -m preprocess.preprocessor --category-C2
 
-This script saves processed schedule and delay data to parquet files for railway stations by DFT category in a `processed_data/` folder.
+This script saves processed schedule and delay data to parquet files for railway stations by DFT category in a `processed_data/` folder. Please note that if you only process one category, and not all the categories, some of the demos described below might not display any data. The only one that will be successful is the station demo as it refers to a singular station's performance assessment.
+
 
 ## Requirements
 
